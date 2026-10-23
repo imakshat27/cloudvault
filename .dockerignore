@@ -1,0 +1,9 @@
+**/node_modules
+**/.env
+**/.env.*
+**/data
+**/uploads
+.git
+.agents
+**/dist
+*.pem

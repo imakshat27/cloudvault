@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.tar.gz
+backend/data/
+backend/uploads/
+.agents/
+.DS_Store
+coverage/
+playwright-report/
+test-results/

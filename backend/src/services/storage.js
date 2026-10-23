@@ -1,0 +1,115 @@
+import fs from 'fs';
+import path from 'path';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { config } from '../config/env.js';
+
+class StorageService {
+  constructor() {
+    this.isS3Configured = Boolean(
+      config.aws.accessKeyId && config.aws.secretAccessKey && config.aws.bucketName
+    );
+
+    if (this.isS3Configured) {
+      console.log(`[Storage] Initializing AWS S3 Client for bucket: ${config.aws.bucketName}`);
+      this.s3Client = new S3Client({
+        region: config.aws.region,
+        credentials: {
+          accessKeyId: config.aws.accessKeyId,
+          secretAccessKey: config.aws.secretAccessKey
+        }
+      });
+      this.bucket = config.aws.bucketName;
+    } else {
+      console.log('[Storage] AWS S3 credentials not set; using local filesystem storage');
+      if (!fs.existsSync(config.paths.uploadsDir)) {
+        fs.mkdirSync(config.paths.uploadsDir, { recursive: true });
+      }
+    }
+  }
+
+  /**
+   * Generates a pre-signed upload URL for direct client upload
+   */
+  async getUploadUrl({ key, mimeType }) {
+    if (this.isS3Configured) {
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        ContentType: mimeType
+      });
+      const uploadUrl = await getSignedUrl(this.s3Client, command, { expiresIn: 900 }); // 15 mins
+      return {
+        uploadUrl,
+        storageType: 's3',
+        key
+      };
+    }
+
+    // Local dev upload URL endpoint
+    return {
+      uploadUrl: `/api/documents/local-upload/${encodeURIComponent(key)}`,
+      storageType: 'local',
+      key
+    };
+  }
+
+  /**
+   * Reads file buffer from storage (S3 or local) for text extraction
+   */
+  async getFileBuffer(key) {
+    if (this.isS3Configured) {
+      const command = new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key
+      });
+      const response = await this.s3Client.send(command);
+      const byteArray = await response.Body.transformToByteArray();
+      return Buffer.from(byteArray);
+    }
+
+    const localPath = path.resolve(config.paths.uploadsDir, key);
+    if (!fs.existsSync(localPath)) {
+      throw new Error(`File not found at local storage path: ${localPath}`);
+    }
+    return fs.readFileSync(localPath);
+  }
+
+  /**
+   * Saves a file buffer directly to local storage (for dev uploads)
+   */
+  async saveLocalFile(key, buffer) {
+    const localPath = path.resolve(config.paths.uploadsDir, key);
+    const parentDir = path.dirname(localPath);
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
+    }
+    fs.writeFileSync(localPath, buffer);
+    return localPath;
+  }
+
+  /**
+   * Deletes a file from storage
+   */
+  async deleteFile(key) {
+    if (this.isS3Configured) {
+      try {
+        const command = new DeleteObjectCommand({
+          Bucket: this.bucket,
+          Key: key
+        });
+        await this.s3Client.send(command);
+      } catch (err) {
+        console.warn(`[Storage] Failed to delete S3 object ${key}:`, err.message);
+      }
+      return;
+    }
+
+    const localPath = path.resolve(config.paths.uploadsDir, key);
+    if (fs.existsSync(localPath)) {
+      fs.unlinkSync(localPath);
+    }
+  }
+}
+
+export const storageService = new StorageService();
