@@ -8,29 +8,15 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('cloudvault_token');
-    const storedUser = localStorage.getItem('cloudvault_user');
-
-    if (token && storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-        // Verify token with backend
-        api.getMe()
-          .then((res) => {
-            setUser(res.user);
-            localStorage.setItem('cloudvault_user', JSON.stringify(res.user));
-          })
-          .catch(() => {
-            logout();
-          })
-          .finally(() => setLoading(false));
-      } catch (e) {
-        logout();
-        setLoading(false);
-      }
-    } else {
-      setLoading(false);
-    }
+    let active = true;
+    if (!localStorage.getItem('cloudvault_token')) { setLoading(false); return; }
+    api.getMe().then(({ user }) => {
+      if (active) setUser(user);
+    }).catch(() => {
+      localStorage.removeItem('cloudvault_token');
+      localStorage.removeItem('cloudvault_user');
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
   const login = async (email, password) => {

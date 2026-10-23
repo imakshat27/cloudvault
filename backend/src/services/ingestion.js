@@ -24,6 +24,7 @@ export async function processDocumentIngestion(documentId) {
     // 2. Fetch raw file from storage (S3 / local)
     console.log(`[Ingestion] Fetching file from storage: key=${doc.s3_key}`);
     const fileBuffer = await storageService.getFileBuffer(doc.s3_key);
+    if (fileBuffer.length > 25 * 1024 * 1024) throw new Error('File exceeds 25 MB');
 
     // 3. Extract text
     console.log(`[Ingestion] Extracting text from ${doc.filename}...`);

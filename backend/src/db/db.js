@@ -42,6 +42,8 @@ class PostgresAdapter {
     console.log(`[DB] Connecting to PostgreSQL at ${config.db.host}:${config.db.port}...`);
     const client = await this.pool.connect();
     try {
+      // Serialize schema setup across API replicas and Lambda cold starts.
+      await client.query('SELECT pg_advisory_lock(842139)');
       // Enable pgvector and uuid
       await client.query(`CREATE EXTENSION IF NOT EXISTS "vector";`);
       await client.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
@@ -54,6 +56,7 @@ class PostgresAdapter {
       }
       console.log('[DB] PostgreSQL + pgvector connected and initialized successfully.');
     } finally {
+      await client.query('SELECT pg_advisory_unlock(842139)');
       client.release();
     }
   }
@@ -83,6 +86,11 @@ class PostgresAdapter {
     return res.rows[0] || null;
   }
 
+  async claimForQueue(id) {
+    const result = await this.pool.query("UPDATE documents SET status = 'queued', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status NOT IN ('queued', 'processing') RETURNING id", [id]);
+    return result.rowCount > 0;
+  }
+
   // Document queries
   async createDocument({ ownerId, filename, s3Key, fileSize, mimeType }) {
     const res = await this.pool.query(
@@ -109,8 +117,8 @@ class PostgresAdapter {
 
   async updateDocumentMetadata(id, { fileSize, mimeType }) {
     const res = await this.pool.query(
-      `UPDATE documents SET file_size = $1, mime_type = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,
-      [fileSize, mimeType, id]
+      `UPDATE documents SET file_size = COALESCE($1, file_size), mime_type = COALESCE($2, mime_type), updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,
+      [fileSize ?? null, mimeType ?? null, id]
     );
     return res.rows[0];
   }
@@ -165,6 +173,10 @@ class PostgresAdapter {
     return res.rows;
   }
 
+  async revokeShare(documentId, shareId) {
+    await this.pool.query('DELETE FROM document_shares WHERE id = $1 AND document_id = $2', [shareId, documentId]);
+  }
+
   // Chunks & Vector storage
   async insertChunks(chunks) {
     if (!chunks || chunks.length === 0) return;
@@ -194,7 +206,7 @@ class PostgresAdapter {
   }
 
   // Vector similarity search with strict Access Control (ACL)
-  async searchSimilarChunks({ queryEmbedding, userId, limit = 5 }) {
+  async searchSimilarChunks({ queryEmbedding, userId, limit = 5, documentId = null }) {
     const vectorStr = `[${queryEmbedding.join(',')}]`;
     const res = await this.pool.query(
       `SELECT c.id, c.document_id, c.chunk_index, c.content,
@@ -204,10 +216,10 @@ class PostgresAdapter {
        JOIN documents d ON c.document_id = d.id
        LEFT JOIN document_shares ds ON d.id = ds.document_id AND ds.shared_with_user_id = $2
        WHERE (d.owner_id = $2 OR ds.shared_with_user_id = $2)
-         AND d.status = 'ready'
+         AND d.status = 'ready' AND ($4::uuid IS NULL OR d.id = $4::uuid)
        ORDER BY c.embedding <=> $1::vector ASC
        LIMIT $3`,
-      [vectorStr, userId, limit]
+      [vectorStr, userId, limit, documentId]
     );
     return res.rows;
   }
@@ -278,6 +290,13 @@ class LocalEmbeddedAdapter {
     const user = this.data.users.find(u => u.id === id);
     if (!user) return null;
     return { id: user.id, email: user.email, created_at: user.created_at };
+  }
+
+  async claimForQueue(id) {
+    const doc = this.data.documents.find(d => d.id === id);
+    if (!doc || ['queued', 'processing'].includes(doc.status)) return false;
+    doc.status = 'queued'; doc.error_message = null; doc.updated_at = new Date().toISOString();
+    this._save(); return true;
   }
 
   // Document queries
@@ -390,6 +409,11 @@ class LocalEmbeddedAdapter {
       });
   }
 
+  async revokeShare(documentId, shareId) {
+    this.data.document_shares = this.data.document_shares.filter(s => !(s.id === shareId && s.document_id === documentId));
+    this._save();
+  }
+
   // Chunks & Vector storage
   async insertChunks(chunks) {
     if (!chunks || chunks.length === 0) return;
@@ -412,12 +436,12 @@ class LocalEmbeddedAdapter {
   }
 
   // Vector similarity search with strict Access Control (ACL)
-  async searchSimilarChunks({ queryEmbedding, userId, limit = 5 }) {
+  async searchSimilarChunks({ queryEmbedding, userId, limit = 5, documentId = null }) {
     // 1. Identify accessible document IDs
     const userShares = this.data.document_shares.filter(s => s.shared_with_user_id === userId);
     const accessibleDocIds = new Set(
       this.data.documents
-        .filter(d => (d.owner_id === userId || userShares.some(s => s.document_id === d.id)) && d.status === 'ready')
+        .filter(d => (d.owner_id === userId || userShares.some(s => s.document_id === d.id)) && d.status === 'ready' && (!documentId || d.id === documentId))
         .map(d => d.id)
     );
 

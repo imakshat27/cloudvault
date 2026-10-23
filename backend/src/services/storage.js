@@ -7,17 +7,13 @@ import { config } from '../config/env.js';
 class StorageService {
   constructor() {
     this.isS3Configured = Boolean(
-      config.aws.accessKeyId && config.aws.secretAccessKey && config.aws.bucketName
+      config.aws.storageMode === 's3' && config.aws.bucketName
     );
 
     if (this.isS3Configured) {
       console.log(`[Storage] Initializing AWS S3 Client for bucket: ${config.aws.bucketName}`);
       this.s3Client = new S3Client({
-        region: config.aws.region,
-        credentials: {
-          accessKeyId: config.aws.accessKeyId,
-          secretAccessKey: config.aws.secretAccessKey
-        }
+        region: config.aws.region
       });
       this.bucket = config.aws.bucketName;
     } else {
@@ -26,6 +22,13 @@ class StorageService {
         fs.mkdirSync(config.paths.uploadsDir, { recursive: true });
       }
     }
+  }
+
+  localPath(key) {
+    const root = path.resolve(config.paths.uploadsDir);
+    const target = path.resolve(root, key);
+    if (!target.startsWith(root + path.sep)) throw new Error('Invalid storage key');
+    return target;
   }
 
   /**
@@ -64,11 +67,12 @@ class StorageService {
         Key: key
       });
       const response = await this.s3Client.send(command);
+      if (response.ContentLength > 25 * 1024 * 1024) { response.Body.destroy(); throw new Error('File exceeds 25 MB'); }
       const byteArray = await response.Body.transformToByteArray();
       return Buffer.from(byteArray);
     }
 
-    const localPath = path.resolve(config.paths.uploadsDir, key);
+    const localPath = this.localPath(key);
     if (!fs.existsSync(localPath)) {
       throw new Error(`File not found at local storage path: ${localPath}`);
     }
@@ -79,7 +83,7 @@ class StorageService {
    * Saves a file buffer directly to local storage (for dev uploads)
    */
   async saveLocalFile(key, buffer) {
-    const localPath = path.resolve(config.paths.uploadsDir, key);
+    const localPath = this.localPath(key);
     const parentDir = path.dirname(localPath);
     if (!fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });
@@ -93,19 +97,17 @@ class StorageService {
    */
   async deleteFile(key) {
     if (this.isS3Configured) {
-      try {
+      {
         const command = new DeleteObjectCommand({
           Bucket: this.bucket,
           Key: key
         });
         await this.s3Client.send(command);
-      } catch (err) {
-        console.warn(`[Storage] Failed to delete S3 object ${key}:`, err.message);
       }
       return;
     }
 
-    const localPath = path.resolve(config.paths.uploadsDir, key);
+    const localPath = this.localPath(key);
     if (fs.existsSync(localPath)) {
       fs.unlinkSync(localPath);
     }

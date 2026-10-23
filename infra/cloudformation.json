@@ -1,0 +1,1358 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "CloudVault: private compute and RDS, S3, SQS/Lambda, Bedrock, ALB/ASG, Secrets Manager and CloudWatch",
+  "Parameters": {
+    "ArtifactBucket": {
+      "Type": "String",
+      "Description": "Existing private S3 artifact bucket in this region"
+    },
+    "AppArtifactKey": {
+      "Type": "String",
+      "Default": "releases/v1/app.tar.gz"
+    },
+    "WorkerArtifactKey": {
+      "Type": "String",
+      "Default": "releases/v1/worker.zip"
+    },
+    "AppDomain": {
+      "Type": "String",
+      "Description": "Hostname covered by the supplied ACM certificate"
+    },
+    "CertificateArn": {
+      "Type": "String",
+      "Description": "ACM certificate ARN in this region"
+    },
+    "HostedZoneId": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Optional Route 53 hosted zone; otherwise configure DNS yourself"
+    },
+    "BedrockChatModel": {
+      "Type": "String",
+      "Description": "Converse-compatible model ID or inference profile available in your account"
+    },
+    "AmiId": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+    },
+    "InstanceType": {
+      "Type": "String",
+      "Default": "t3.micro",
+      "AllowedValues": [
+        "t3.micro",
+        "t3.small",
+        "t3.medium"
+      ]
+    },
+    "DatabaseClass": {
+      "Type": "String",
+      "Default": "db.t4g.micro"
+    },
+    "DatabaseMultiAZ": {
+      "Type": "String",
+      "Default": "true",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
+    }
+  },
+  "Conditions": {
+    "HasHostedZone": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "HostedZoneId"
+            },
+            ""
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "VPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.42.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CloudVault"
+          }
+        ]
+      }
+    },
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {}
+    },
+    "GatewayAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "InternetGatewayId": {
+          "Ref": "InternetGateway"
+        }
+      }
+    },
+    "PublicRoutes": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      }
+    },
+    "InternetRoute": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PublicRoutes"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "InternetGateway"
+        }
+      },
+      "DependsOn": "GatewayAttachment"
+    },
+    "PublicSubnet0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "CidrBlock": "10.42.0.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        }
+      }
+    },
+    "PrivateSubnet0": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "CidrBlock": "10.42.10.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            0,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        }
+      }
+    },
+    "PublicAssociation0": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnet0"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRoutes"
+        }
+      }
+    },
+    "NatIP0": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      }
+    },
+    "Nat0": {
+      "Type": "AWS::EC2::NatGateway",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnet0"
+        },
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "NatIP0",
+            "AllocationId"
+          ]
+        }
+      },
+      "DependsOn": "GatewayAttachment"
+    },
+    "PrivateRoutes0": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      }
+    },
+    "PrivateAssociation0": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PrivateSubnet0"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRoutes0"
+        }
+      }
+    },
+    "PrivateRoute0": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRoutes0"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NatGatewayId": {
+          "Ref": "Nat0"
+        }
+      }
+    },
+    "PublicSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "CidrBlock": "10.42.1.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        }
+      }
+    },
+    "PrivateSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "CidrBlock": "10.42.11.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            1,
+            {
+              "Fn::GetAZs": ""
+            }
+          ]
+        }
+      }
+    },
+    "PublicAssociation1": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnet1"
+        },
+        "RouteTableId": {
+          "Ref": "PublicRoutes"
+        }
+      }
+    },
+    "NatIP1": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      }
+    },
+    "Nat1": {
+      "Type": "AWS::EC2::NatGateway",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PublicSubnet1"
+        },
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "NatIP1",
+            "AllocationId"
+          ]
+        }
+      },
+      "DependsOn": "GatewayAttachment"
+    },
+    "PrivateRoutes1": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      }
+    },
+    "PrivateAssociation1": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "PrivateSubnet1"
+        },
+        "RouteTableId": {
+          "Ref": "PrivateRoutes1"
+        }
+      }
+    },
+    "PrivateRoute1": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "PrivateRoutes1"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NatGatewayId": {
+          "Ref": "Nat1"
+        }
+      }
+    },
+    "S3Endpoint": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "ServiceName": {
+          "Fn::Sub": "com.amazonaws.${AWS::Region}.s3"
+        },
+        "RouteTableIds": [
+          {
+            "Ref": "PrivateRoutes0"
+          },
+          {
+            "Ref": "PrivateRoutes1"
+          }
+        ],
+        "VpcEndpointType": "Gateway"
+      }
+    },
+    "LoadBalancerSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Public HTTPS and HTTP redirect only",
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "AppSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "API traffic only from ALB",
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 3000,
+            "ToPort": 3000,
+            "SourceSecurityGroupId": {
+              "Ref": "LoadBalancerSG"
+            }
+          }
+        ]
+      }
+    },
+    "WorkerSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "No inbound access to Lambda",
+        "VpcId": {
+          "Ref": "VPC"
+        }
+      }
+    },
+    "DatabaseSG": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "PostgreSQL only from API and worker",
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 5432,
+            "ToPort": 5432,
+            "SourceSecurityGroupId": {
+              "Ref": "AppSG"
+            }
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 5432,
+            "ToPort": 5432,
+            "SourceSecurityGroupId": {
+              "Ref": "WorkerSG"
+            }
+          }
+        ]
+      }
+    },
+    "DatabaseSubnets": {
+      "Type": "AWS::RDS::DBSubnetGroup",
+      "Properties": {
+        "DBSubnetGroupDescription": "Private database subnets in two AZs",
+        "SubnetIds": [
+          {
+            "Ref": "PrivateSubnet0"
+          },
+          {
+            "Ref": "PrivateSubnet1"
+          }
+        ]
+      }
+    },
+    "Database": {
+      "Type": "AWS::RDS::DBInstance",
+      "Properties": {
+        "Engine": "postgres",
+        "DBInstanceClass": {
+          "Ref": "DatabaseClass"
+        },
+        "DBName": "cloudvault",
+        "MasterUsername": "cloudvault",
+        "ManageMasterUserPassword": true,
+        "AllocatedStorage": "20",
+        "MaxAllocatedStorage": 100,
+        "StorageType": "gp3",
+        "StorageEncrypted": true,
+        "MultiAZ": {
+          "Ref": "DatabaseMultiAZ"
+        },
+        "BackupRetentionPeriod": 7,
+        "PubliclyAccessible": false,
+        "DBSubnetGroupName": {
+          "Ref": "DatabaseSubnets"
+        },
+        "VPCSecurityGroups": [
+          {
+            "Ref": "DatabaseSG"
+          }
+        ],
+        "DeletionProtection": true,
+        "CopyTagsToSnapshot": true,
+        "AutoMinorVersionUpgrade": true
+      },
+      "DeletionPolicy": "Snapshot",
+      "UpdateReplacePolicy": "Snapshot"
+    },
+    "AppSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Description": "Shared JWT signing key for all CloudVault replicas",
+        "GenerateSecretString": {
+          "SecretStringTemplate": "{}",
+          "GenerateStringKey": "jwtSecret",
+          "PasswordLength": 64,
+          "ExcludePunctuation": true
+        }
+      }
+    },
+    "Documents": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "CorsConfiguration": {
+          "CorsRules": [
+            {
+              "AllowedOrigins": [
+                {
+                  "Fn::Sub": "https://${AppDomain}"
+                }
+              ],
+              "AllowedMethods": [
+                "PUT"
+              ],
+              "AllowedHeaders": [
+                "content-type"
+              ],
+              "MaxAge": 900
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "AbortIncompleteUploads",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 1
+              }
+            }
+          ]
+        }
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "DocumentsPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "Documents"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Documents",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${Documents.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "DeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "FifoQueue": true,
+        "MessageRetentionPeriod": 1209600,
+        "SqsManagedSseEnabled": true
+      }
+    },
+    "IngestionQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "FifoQueue": true,
+        "VisibilityTimeout": 1800,
+        "MessageRetentionPeriod": 345600,
+        "SqsManagedSseEnabled": true,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "DeadLetterQueue",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": 3
+        }
+      }
+    },
+    "IngestionQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Properties": {
+        "Queues": [
+          {
+            "Ref": "IngestionQueue"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:*",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "IngestionQueue",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "DeadLetterQueuePolicy": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Properties": {
+        "Queues": [
+          {
+            "Ref": "DeadLetterQueue"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "sqs:*",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "DeadLetterQueue",
+                  "Arn"
+                ]
+              },
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ApiRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "CloudVaultAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "Resource": [
+                    {
+                      "Ref": "AppSecret"
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "Database",
+                        "MasterUserSecret.SecretArn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${Documents.Arn}/uploads/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:s3:::${ArtifactBucket}/${AppArtifactKey}"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:SendMessage"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "IngestionQueue",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:InvokeModel"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:DescribeLogStreams"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${ApiLogs.Arn}:*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ApiProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "ApiRole"
+          }
+        ]
+      }
+    },
+    "WorkerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "CloudVaultAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "Resource": [
+                    {
+                      "Ref": "AppSecret"
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "Database",
+                        "MasterUserSecret.SecretArn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${Documents.Arn}/uploads/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                    "sqs:GetQueueAttributes"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "IngestionQueue",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:InvokeModel"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "WorkerLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-ingest"
+        },
+        "RetentionInDays": 14
+      }
+    },
+    "ApiLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "RetentionInDays": 14
+      }
+    },
+    "Worker": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-ingest"
+        },
+        "Runtime": "nodejs22.x",
+        "Handler": "src/worker.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "WorkerRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 300,
+        "MemorySize": 1024,
+        "ReservedConcurrentExecutions": 5,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ArtifactBucket"
+          },
+          "S3Key": {
+            "Ref": "WorkerArtifactKey"
+          }
+        },
+        "VpcConfig": {
+          "SubnetIds": [
+            {
+              "Ref": "PrivateSubnet0"
+            },
+            {
+              "Ref": "PrivateSubnet1"
+            }
+          ],
+          "SecurityGroupIds": [
+            {
+              "Ref": "WorkerSG"
+            }
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "NODE_ENV": "production",
+            "DB_HOST": {
+              "Fn::GetAtt": [
+                "Database",
+                "Endpoint.Address"
+              ]
+            },
+            "DB_NAME": "cloudvault",
+            "DB_SSL": "true",
+            "DB_SECRET_ARN": {
+              "Fn::GetAtt": [
+                "Database",
+                "MasterUserSecret.SecretArn"
+              ]
+            },
+            "APP_SECRET_ARN": {
+              "Ref": "AppSecret"
+            },
+            "STORAGE_MODE": "s3",
+            "S3_BUCKET_NAME": {
+              "Ref": "Documents"
+            },
+            "AI_ENGINE": "bedrock",
+            "BEDROCK_CHAT_MODEL": {
+              "Ref": "BedrockChatModel"
+            },
+            "SQS_QUEUE_URL": {
+              "Ref": "IngestionQueue"
+            },
+            "CORS_ORIGIN": {
+              "Fn::Sub": "https://${AppDomain}"
+            }
+          }
+        }
+      },
+      "DependsOn": "WorkerLogs"
+    },
+    "QueueConsumer": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "Properties": {
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "IngestionQueue",
+            "Arn"
+          ]
+        },
+        "FunctionName": {
+          "Ref": "Worker"
+        },
+        "BatchSize": 1,
+        "FunctionResponseTypes": [
+          "ReportBatchItemFailures"
+        ],
+        "Enabled": true
+      }
+    },
+    "LoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties": {
+        "Scheme": "internet-facing",
+        "Subnets": [
+          {
+            "Ref": "PublicSubnet0"
+          },
+          {
+            "Ref": "PublicSubnet1"
+          }
+        ],
+        "SecurityGroups": [
+          {
+            "Ref": "LoadBalancerSG"
+          }
+        ],
+        "LoadBalancerAttributes": [
+          {
+            "Key": "idle_timeout.timeout_seconds",
+            "Value": "120"
+          }
+        ]
+      }
+    },
+    "TargetGroup": {
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties": {
+        "Port": 3000,
+        "Protocol": "HTTP",
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "HealthCheckPath": "/api/health",
+        "Matcher": {
+          "HttpCode": "200"
+        },
+        "TargetGroupAttributes": [
+          {
+            "Key": "deregistration_delay.timeout_seconds",
+            "Value": "30"
+          }
+        ]
+      }
+    },
+    "HTTPListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "LoadBalancerArn": {
+          "Ref": "LoadBalancer"
+        },
+        "Port": 80,
+        "Protocol": "HTTP",
+        "DefaultActions": [
+          {
+            "Type": "redirect",
+            "RedirectConfig": {
+              "Protocol": "HTTPS",
+              "Port": "443",
+              "StatusCode": "HTTP_301"
+            }
+          }
+        ]
+      }
+    },
+    "HTTPSListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "LoadBalancerArn": {
+          "Ref": "LoadBalancer"
+        },
+        "Port": 443,
+        "Protocol": "HTTPS",
+        "SslPolicy": "ELBSecurityPolicy-TLS13-1-2-2021-06",
+        "Certificates": [
+          {
+            "CertificateArn": {
+              "Ref": "CertificateArn"
+            }
+          }
+        ],
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {
+              "Ref": "TargetGroup"
+            }
+          }
+        ]
+      }
+    },
+    "LaunchTemplate": {
+      "Type": "AWS::EC2::LaunchTemplate",
+      "Properties": {
+        "LaunchTemplateData": {
+          "ImageId": {
+            "Ref": "AmiId"
+          },
+          "InstanceType": {
+            "Ref": "InstanceType"
+          },
+          "IamInstanceProfile": {
+            "Arn": {
+              "Fn::GetAtt": [
+                "ApiProfile",
+                "Arn"
+              ]
+            }
+          },
+          "SecurityGroupIds": [
+            {
+              "Ref": "AppSG"
+            }
+          ],
+          "MetadataOptions": {
+            "HttpTokens": "required",
+            "HttpEndpoint": "enabled"
+          },
+          "BlockDeviceMappings": [
+            {
+              "DeviceName": "/dev/xvda",
+              "Ebs": {
+                "VolumeSize": 16,
+                "VolumeType": "gp3",
+                "Encrypted": true
+              }
+            }
+          ],
+          "UserData": {
+            "Fn::Base64": {
+              "Fn::Sub": "#!/bin/bash\nset -euo pipefail\ndnf install -y nodejs22 nodejs22-npm amazon-cloudwatch-agent\nmkdir -p /opt/cloudvault\naws s3 cp s3://${ArtifactBucket}/${AppArtifactKey} /tmp/app.tar.gz\ntar -xzf /tmp/app.tar.gz -C /opt/cloudvault\nuseradd --system --home-dir /opt/cloudvault cloudvault || true\nchown -R cloudvault:cloudvault /opt/cloudvault\ncat > /etc/cloudvault.env <<'ENV'\nAWS_REGION=${AWS::Region}\nNODE_ENV=production\nDB_HOST=${Database.Endpoint.Address}\nDB_NAME=cloudvault\nDB_SSL=true\nDB_SECRET_ARN=${Database.MasterUserSecret.SecretArn}\nAPP_SECRET_ARN=${AppSecret}\nSTORAGE_MODE=s3\nS3_BUCKET_NAME=${Documents}\nAI_ENGINE=bedrock\nBEDROCK_CHAT_MODEL=${BedrockChatModel}\nSQS_QUEUE_URL=${IngestionQueue}\nCORS_ORIGIN=https://${AppDomain}\nENV\nchmod 600 /etc/cloudvault.env\ncat > /etc/systemd/system/cloudvault.service <<'SERVICE'\n[Unit]\nDescription=CloudVault API and web\nAfter=network-online.target\n[Service]\nUser=cloudvault\nWorkingDirectory=/opt/cloudvault/backend\nEnvironmentFile=/etc/cloudvault.env\nExecStart=/usr/bin/node-22 src/start.js\nRestart=always\nRestartSec=5\nNoNewPrivileges=true\nProtectSystem=strict\nPrivateTmp=true\nStandardOutput=append:/var/log/cloudvault.log\nStandardError=append:/var/log/cloudvault.log\n[Install]\nWantedBy=multi-user.target\nSERVICE\ncat > /opt/aws/amazon-cloudwatch-agent/etc/config.json <<'LOGS'\n{\"logs\":{\"logs_collected\":{\"files\":{\"collect_list\":[{\"file_path\":\"/var/log/cloudvault.log\",\"log_group_name\":\"${ApiLogs}\",\"log_stream_name\":\"{instance_id}\"}]}}}}\nLOGS\n/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json -s\nsystemctl daemon-reload\nsystemctl enable --now cloudvault\n"
+            }
+          }
+        }
+      }
+    },
+    "ApiFleet": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "MinSize": "2",
+        "MaxSize": "4",
+        "DesiredCapacity": "2",
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "PrivateSubnet0"
+          },
+          {
+            "Ref": "PrivateSubnet1"
+          }
+        ],
+        "TargetGroupARNs": [
+          {
+            "Ref": "TargetGroup"
+          }
+        ],
+        "HealthCheckType": "ELB",
+        "HealthCheckGracePeriod": 600,
+        "LaunchTemplate": {
+          "LaunchTemplateId": {
+            "Ref": "LaunchTemplate"
+          },
+          "Version": {
+            "Fn::GetAtt": [
+              "LaunchTemplate",
+              "LatestVersionNumber"
+            ]
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "CloudVault API",
+            "PropagateAtLaunch": true
+          }
+        ]
+      },
+      "DependsOn": [
+        "PrivateRoute0",
+        "PrivateRoute1",
+        "HTTPSListener"
+      ],
+      "UpdatePolicy": {
+        "AutoScalingRollingUpdate": {
+          "MaxBatchSize": 1,
+          "MinInstancesInService": 1,
+          "PauseTime": "PT5M"
+        }
+      }
+    },
+    "ScalingPolicy": {
+      "Type": "AWS::AutoScaling::ScalingPolicy",
+      "Properties": {
+        "AutoScalingGroupName": {
+          "Ref": "ApiFleet"
+        },
+        "PolicyType": "TargetTrackingScaling",
+        "TargetTrackingConfiguration": {
+          "PredefinedMetricSpecification": {
+            "PredefinedMetricType": "ASGAverageCPUUtilization"
+          },
+          "TargetValue": 60
+        }
+      }
+    },
+    "DNS": {
+      "Type": "AWS::Route53::RecordSet",
+      "Properties": {
+        "HostedZoneId": {
+          "Ref": "HostedZoneId"
+        },
+        "Name": {
+          "Ref": "AppDomain"
+        },
+        "Type": "A",
+        "AliasTarget": {
+          "DNSName": {
+            "Fn::GetAtt": [
+              "LoadBalancer",
+              "DNSName"
+            ]
+          },
+          "HostedZoneId": {
+            "Fn::GetAtt": [
+              "LoadBalancer",
+              "CanonicalHostedZoneID"
+            ]
+          }
+        }
+      },
+      "Condition": "HasHostedZone"
+    },
+    "Alerts": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {}
+    },
+    "FailedJobs": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "Namespace": "AWS/SQS",
+        "MetricName": "ApproximateNumberOfMessagesVisible",
+        "Dimensions": [
+          {
+            "Name": "QueueName",
+            "Value": {
+              "Fn::GetAtt": [
+                "DeadLetterQueue",
+                "QueueName"
+              ]
+            }
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 60,
+        "EvaluationPeriods": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "WorkerErrors": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "Namespace": "AWS/Lambda",
+        "MetricName": "Errors",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "Worker"
+            }
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 60,
+        "EvaluationPeriods": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "UnhealthyAPI": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "Namespace": "AWS/ApplicationELB",
+        "MetricName": "UnHealthyHostCount",
+        "Dimensions": [
+          {
+            "Name": "LoadBalancer",
+            "Value": {
+              "Fn::GetAtt": [
+                "LoadBalancer",
+                "LoadBalancerFullName"
+              ]
+            }
+          },
+          {
+            "Name": "TargetGroup",
+            "Value": {
+              "Fn::GetAtt": [
+                "TargetGroup",
+                "TargetGroupFullName"
+              ]
+            }
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 60,
+        "EvaluationPeriods": 2,
+        "Threshold": 1,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    },
+    "DatabaseCPU": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "Namespace": "AWS/RDS",
+        "MetricName": "CPUUtilization",
+        "Dimensions": [
+          {
+            "Name": "DBInstanceIdentifier",
+            "Value": {
+              "Ref": "Database"
+            }
+          }
+        ],
+        "Statistic": "Maximum",
+        "Period": 60,
+        "EvaluationPeriods": 2,
+        "Threshold": 85,
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Ref": "Alerts"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "ApplicationURL": {
+      "Value": {
+        "Fn::Sub": "https://${AppDomain}"
+      }
+    },
+    "ArtifactBucket": {
+      "Value": {
+        "Ref": "ArtifactBucket"
+      }
+    },
+    "FilesBucket": {
+      "Value": {
+        "Ref": "Documents"
+      }
+    },
+    "DeadLetterQueueURL": {
+      "Value": {
+        "Ref": "DeadLetterQueue"
+      }
+    },
+    "AlarmTopicArn": {
+      "Value": {
+        "Ref": "Alerts"
+      }
+    },
+    "ApiLogGroup": {
+      "Value": {
+        "Ref": "ApiLogs"
+      }
+    },
+    "LoadBalancerDNS": {
+      "Value": {
+        "Fn::GetAtt": [
+          "LoadBalancer",
+          "DNSName"
+        ]
+      }
+    }
+  }
+}

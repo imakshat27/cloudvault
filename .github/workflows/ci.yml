@@ -1,0 +1,26 @@
+name: CloudVault checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+      - run: npm ci --prefix backend
+      - run: npm ci --prefix frontend
+      - run: npm test --prefix backend
+      - run: npm run lint --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: npm audit --prefix backend --omit=dev
+      - run: npm audit --prefix frontend --omit=dev
+      - run: python3 scripts/check-secrets.py
+      - run: pip install cfn-lint
+      - run: cfn-lint infra/cloudformation.json

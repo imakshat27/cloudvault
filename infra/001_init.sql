@@ -62,3 +62,5 @@ CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
 -- Note: IVFFlat requires some rows already populated before creating index with lists.
 -- HNSW can be created immediately:
 -- CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding vector_cosine_ops);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding vector_cosine_ops);

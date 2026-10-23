@@ -9,8 +9,8 @@ function AppContent() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0a0d14] flex flex-col items-center justify-center text-slate-400 space-y-3">
-        <Loader2 className="w-8 h-8 animate-spin text-sky-400" />
+      <div className="min-h-screen flex flex-col items-center justify-center text-slate-500 space-y-3">
+        <Loader2 className="w-8 h-8 animate-spin text-emerald-700" />
         <p className="text-xs font-medium tracking-wide">Connecting to CloudVault...</p>
       </div>
     );

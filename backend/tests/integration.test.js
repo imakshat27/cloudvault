@@ -1,119 +1,67 @@
-// Quick end-to-end API test script
-async function runTests() {
-  const baseUrl = 'http://localhost:3000/api';
-  console.log('🧪 Starting CloudVault Backend E2E Test...');
-
-  // 1. Register
-  const testEmail = `test_${Date.now()}@example.com`;
-  const registerRes = await fetch(`${baseUrl}/auth/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: testEmail, password: 'password123' })
-  });
-  const registerData = await registerRes.json();
-  console.log('1. Register status:', registerRes.status, registerData.message);
-  const token = registerData.token;
-
-  if (!token) throw new Error('Failed to get token');
-
-  // 2. Request upload URL for a sample document
-  const uploadUrlRes = await fetch(`${baseUrl}/documents/upload-url`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      filename: 'cloud_architecture_overview.txt',
-      fileSize: 500,
-      mimeType: 'text/plain'
-    })
-  });
-  const uploadUrlData = await uploadUrlRes.json();
-  console.log('2. Upload URL generated:', uploadUrlData.storageType, 'DocID:', uploadUrlData.documentId);
-
-  // 3. Upload content to the URL
-  const sampleContent = `CloudVault is a cloud-native document storage platform with an AI-powered retrieval layer.
-Beyond upload, download, and share capabilities, users can semantically search, summarize, and ask questions
-about their documents via Retrieval-Augmented Generation (RAG).
-The system uses Amazon RDS PostgreSQL with the pgvector extension for co-locating vector embeddings and access control metadata.
-This prevents permission leakage across multi-tenant environments.
-Amazon S3 stores raw uploaded objects, and Amazon Bedrock generates Titan Embeddings V2 vectors.`;
-
-  const uploadRes = await fetch(`http://localhost:3000${uploadUrlData.uploadUrl}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'text/plain' },
-    body: sampleContent
-  });
-  console.log('3. File upload status:', uploadRes.status);
-
-  // 4. Mark complete to trigger ingestion
-  const completeRes = await fetch(`${baseUrl}/documents/${uploadUrlData.documentId}/complete`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({ fileSize: sampleContent.length, mimeType: 'text/plain' })
-  });
-  const completeData = await completeRes.json();
-  console.log('4. Complete ingestion trigger status:', completeData.status);
-
-  // 5. Poll status until ready
-  let isReady = false;
-  for (let i = 0; i < 10; i++) {
-    await new Promise(r => setTimeout(r, 600));
-    const statusRes = await fetch(`${baseUrl}/documents/${uploadUrlData.documentId}/status`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    const statusData = await statusRes.json();
-    console.log(`   Poll attempt ${i + 1}: status = ${statusData.status}`);
-    if (statusData.status === 'ready') {
-      isReady = true;
-      break;
-    }
-  }
-
-  if (!isReady) throw new Error('Document did not reach ready status');
-
-  // 6. Semantic search
-  const searchRes = await fetch(`${baseUrl}/search`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({ query: 'pgvector RDS permission leakage' })
-  });
-  const searchData = await searchRes.json();
-  console.log('6. Semantic search matches:', searchData.matchCount, 'Top similarity:', searchData.results[0]?.similarity);
-
-  // 7. RAG Q&A
-  const askRes = await fetch(`${baseUrl}/ask`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({ question: 'Why does CloudVault use RDS pgvector?' })
-  });
-  const askData = await askRes.json();
-  console.log('7. RAG Answer received:');
-  console.log('   Question:', askData.question);
-  console.log('   Answer preview:', askData.answer.slice(0, 100) + '...');
-  console.log('   Sources count:', askData.sources.length);
-
-  // 8. Document list
-  const listRes = await fetch(`${baseUrl}/documents`, {
-    headers: { 'Authorization': `Bearer ${token}` }
-  });
-  const listData = await listRes.json();
-  console.log('8. Documents listed for user:', listData.documents.length, 'Chunk count:', listData.documents[0]?.chunk_count);
-
-  console.log('\n🎉 ALL BACKEND ENDPOINTS & INGESTION PIPELINE VERIFIED SUCCESSFULLY!');
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const dir = await mkdtemp(path.join(tmpdir(), 'cloudvault-test-'));
+Object.assign(process.env, { DATA_DIR: path.join(dir, 'data'), UPLOADS_DIR: path.join(dir, 'uploads'), AI_ENGINE: 'local', STORAGE_MODE: 'local', PORT: '0', NODE_ENV: 'test', DB_HOST: '', SQS_QUEUE_URL: '' });
+const { startServer } = await import('../src/app.js');
+const server = await startServer();
+const base = `http://127.0.0.1:${server.address().port}/api`;
+async function call(url, token, body, method = body ? 'POST' : 'GET') {
+ const response = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+ return { status: response.status, data: await response.json() };
 }
-
-runTests().catch(err => {
-  console.error('❌ Test failed:', err);
-  process.exit(1);
-});
+try {
+ const owner = await call('/auth/register', null, { email: 'owner@example.com', password: 'test-password-123' });
+ assert.equal(owner.status, 201); const a = owner.data.token;
+ const other = await call('/auth/register', null, { email: 'reader@example.com', password: 'test-password-123' });
+ const b = other.data.token; assert.ok(b);
+ assert.equal((await call('/auth/login', null, { email: 'owner@example.com', password: 'wrong' })).status, 401);
+ assert.equal((await call('/auth/register', null, { email: 'bad', password: 'short' })).status, 400);
+ assert.equal((await call('/documents')).status, 401);
+ assert.equal((await call('/documents/upload-url', a, { filename: 'bad.exe', fileSize: 12 })).status, 400);
+ const content = 'The Andromeda project uses SQS for decoupling and RDS pgvector for vector search. Its launch budget is 4200 credits.';
+ const make = async (filename, text) => {
+  const signed = await call('/documents/upload-url', a, { filename, fileSize: Buffer.byteLength(text), mimeType: 'text/plain' });
+  assert.equal(signed.status, 201);
+  const url = `http://127.0.0.1:${server.address().port}${signed.data.uploadUrl}`;
+  assert.equal((await fetch(url, { method: 'PUT', body: text })).status, 401);
+  assert.equal((await fetch(url, { method: 'PUT', headers: { Authorization: `Bearer ${b}`, 'Content-Type': 'text/plain' }, body: text })).status, 403);
+  assert.equal((await fetch(url, { method: 'PUT', headers: { Authorization: `Bearer ${a}`, 'Content-Type': 'text/plain' }, body: text })).status, 200);
+  const id = signed.data.documentId;
+  assert.equal((await call(`/documents/${id}/complete`, a, {})).status, 200);
+  for (let i = 0; i < 50; i++) {
+   const r = await call(`/documents/${id}/status`, a);
+   if (r.data.status === 'ready') return id;
+   assert.notEqual(r.data.status, 'failed');
+   await new Promise(r => setTimeout(r, 30));
+  }
+  throw new Error('Indexing did not finish');
+ };
+ const id = await make('Andromeda.txt', content);
+ const secondId = await make('Orion.md', 'Orion uses a completely different design and a budget of 900 credits.');
+ assert.equal((await call(`/documents/${id}/status`, b)).status, 404);
+ assert.equal((await call(`/documents/${id}/content?text=true`, b)).status, 404);
+ assert.equal((await call('/ask', b, { question: 'Andromeda budget' })).data.sources.length, 0);
+ assert.equal((await call('/ask', b, { question: 'Andromeda', documentId: id })).status, 404);
+ assert.equal((await call(`/documents/${id}`, b, null, 'DELETE')).status, 403);
+ assert.equal((await call(`/documents/${id}/share`, b, { email: 'owner@example.com' })).status, 403);
+ assert.equal((await call(`/documents/${id}/share`, a, { email: 'reader@example.com', permission: 'admin' })).status, 400);
+ assert.equal((await call(`/documents/${id}/share`, a, { email: 'reader@example.com' })).status, 200);
+ assert.equal((await call('/documents', b)).data.documents.length, 1);
+ assert.equal((await call(`/documents/${id}/content?text=true`, b)).data.text, content);
+ const scoped = await call('/ask', a, { question: 'What is the budget?', documentId: id });
+ assert.ok(scoped.data.sources.length > 0);
+ assert.ok(scoped.data.sources.every(s => s.documentId === id));
+ assert.ok(!scoped.data.sources.some(s => s.documentId === secondId));
+ const search = await call('/search', b, { query: 'decoupling RDS pgvector' });
+ assert.ok(search.data.results.length > 0); assert.ok(search.data.results.every(s => s.documentId === id));
+ const download = await fetch(base + `/documents/${id}/content`, { headers: { Authorization: `Bearer ${b}` } });
+ assert.equal(await download.text(), content);
+ const shares = await call(`/documents/${id}/shares`, a);
+ assert.equal((await call(`/documents/${id}/shares/${shares.data.shares[0].id}`, a, null, 'DELETE')).status, 200);
+ assert.equal((await call(`/documents/${id}/content?text=true`, b)).status, 404);
+ assert.equal((await call('/search', b, { query: 'Andromeda' })).data.results.length, 0);
+ assert.equal((await call(`/documents/${id}`, a, null, 'DELETE')).status, 200);
+ console.log('PASS: authentication, uploads, indexing, scoped RAG, search, preview/download, sharing/revocation, deletion and cross-user isolation');
+} finally { await new Promise(r => server.close(r)); await rm(dir, { recursive: true, force: true }); }

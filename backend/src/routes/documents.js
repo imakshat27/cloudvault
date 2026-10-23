@@ -4,7 +4,8 @@ import path from 'path';
 import multer from 'multer';
 import { db } from '../db/db.js';
 import { storageService } from '../services/storage.js';
-import { processDocumentIngestion } from '../services/ingestion.js';
+import { enqueueDocument } from '../services/queue.js';
+import { extractTextFromBuffer } from '../services/extractor.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -18,14 +19,17 @@ const upload = multer({
 // Request an upload URL (pre-signed S3 URL in AWS mode, or local route in dev mode)
 router.post('/upload-url', requireAuth, async (req, res) => {
   try {
-    const { filename, fileSize, mimeType } = req.body;
+    const { filename, fileSize } = req.body;
 
-    if (!filename) {
+    if (typeof filename !== 'string' || !filename || filename.length > 255) {
       return res.status(400).json({ error: 'Filename is required' });
     }
 
-    const sanitizedName = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (!Number.isInteger(fileSize) || fileSize <= 0 || fileSize > 25 * 1024 * 1024) return res.status(400).json({ error: 'File must be between 1 byte and 25 MB' });
+    const originalName = path.basename(filename.replace(/\\/g, '/')).replace(/[\x00-\x1f\x7f]/g, '');
+    const sanitizedName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const ext = path.extname(sanitizedName).toLowerCase();
+    const mimeType = { '.pdf': 'application/pdf', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.txt': 'text/plain', '.md': 'text/markdown' }[ext];
     const validExts = ['.pdf', '.docx', '.txt', '.md'];
 
     if (!validExts.includes(ext)) {
@@ -47,7 +51,7 @@ router.post('/upload-url', requireAuth, async (req, res) => {
     // Create database entry with pending status
     const doc = await db.createDocument({
       ownerId: req.user.id,
-      filename: sanitizedName,
+      filename: originalName,
       s3Key,
       fileSize: fileSize || 0,
       mimeType: mimeType || 'application/octet-stream'
@@ -68,13 +72,17 @@ router.post('/upload-url', requireAuth, async (req, res) => {
 
 // 2. PUT /documents/local-upload/:key (*)
 // Local dev fallback endpoint for uploading file directly
-router.put('/local-upload/*', upload.single('file'), async (req, res) => {
+router.put('/local-upload/*', requireAuth, upload.single('file'), async (req, res) => {
   try {
     const key = req.params[0];
     if (!key) {
       return res.status(400).json({ error: 'Missing storage key' });
     }
 
+    const docs = await db.listDocumentsForUser(req.user.id);
+    const target = docs.find(d => d.s3_key === key && d.is_owner);
+    if (!target || target.status !== 'pending') return res.status(403).json({ error: 'Upload not authorized' });
+    if (storageService.isS3Configured) return res.status(400).json({ error: 'Use the S3 upload URL' });
     // Handle raw binary stream or multipart
     let buffer;
     if (req.file) {
@@ -94,6 +102,7 @@ router.put('/local-upload/*', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'No file content received' });
     }
 
+    if (buffer.length > 25 * 1024 * 1024) return res.status(413).json({ error: 'Maximum file size is 25 MB' });
     await storageService.saveLocalFile(key, buffer);
     return res.json({ success: true, key, size: buffer.length });
   } catch (err) {
@@ -123,9 +132,8 @@ router.post('/:id/complete', requireAuth, async (req, res) => {
     }
 
     // Trigger ingestion asynchronously (background execution on EC2)
-    processDocumentIngestion(id).catch(err => {
-      console.error(`[Documents] Background ingestion failed for ${id}:`, err);
-    });
+    if (['queued', 'processing', 'ready'].includes(doc.status)) return res.status(409).json({ error: 'Document already submitted' });
+    await enqueueDocument(id);
 
     return res.json({
       message: 'Upload completed. Document ingestion started.',
@@ -134,7 +142,7 @@ router.post('/:id/complete', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('[Documents] Complete error:', err);
-    return res.status(500).json({ error: 'Failed to complete document upload' });
+    return res.status(err.status || 500).json({ error: err.status === 409 ? err.message : 'Failed to complete document upload' });
   }
 });
 
@@ -161,6 +169,7 @@ router.get('/:id/status', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Document not found' });
     }
 
+    if (!(await db.listDocumentsForUser(req.user.id)).some(d => d.id === id)) return res.status(404).json({ error: 'Document not found' });
     return res.json({
       id: doc.id,
       filename: doc.filename,
@@ -180,6 +189,7 @@ router.post('/:id/share', requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { email, permission = 'view' } = req.body;
+    if (permission !== 'view') return res.status(400).json({ error: 'Only view permission is supported' });
 
     if (!email) {
       return res.status(400).json({ error: 'Email of user to share with is required' });
@@ -272,6 +282,34 @@ router.delete('/:id', requireAuth, async (req, res) => {
   }
 });
 
+// Authenticated preview and download: storage keys are never public capabilities.
+router.get('/:id/content', requireAuth, async (req, res, next) => {
+  try {
+    const doc = (await db.listDocumentsForUser(req.user.id)).find(d => d.id === req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    const buffer = await storageService.getFileBuffer(doc.s3_key);
+    res.set('Cache-Control', 'private, no-store');
+    if (req.query.text === 'true') {
+      const { text } = await extractTextFromBuffer(buffer, doc.filename);
+      return res.json({ text });
+    }
+    const pdf = doc.filename.toLowerCase().endsWith('.pdf');
+    res.set('Content-Type', pdf ? 'application/pdf' : 'application/octet-stream');
+    const asciiName = doc.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    res.set('Content-Disposition', `${req.query.download === 'true' || !pdf ? 'attachment' : 'inline'}; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(doc.filename)}`);
+    return res.send(buffer);
+  } catch (error) { next(error); }
+});
+
+router.delete('/:id/shares/:shareId', requireAuth, async (req, res, next) => {
+ try {
+  const doc = await db.getDocumentById(req.params.id);
+  if (!doc || doc.owner_id !== req.user.id) return res.status(404).json({ error: 'Document not found' });
+  await db.revokeShare(req.params.id, req.params.shareId);
+  res.json({ success: true });
+ } catch (error) { next(error); }
+});
+
 // 9. POST /documents/:id/reindex
 // Trigger re-processing if a file failed or needs re-embedding
 router.post('/:id/reindex', requireAuth, async (req, res) => {
@@ -287,9 +325,8 @@ router.post('/:id/reindex', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'Only document owner can re-index' });
     }
 
-    processDocumentIngestion(id).catch(err => {
-      console.error(`[Documents] Re-indexing failed for ${id}:`, err);
-    });
+    if (['queued', 'processing'].includes(doc.status)) return res.status(409).json({ error: 'Document is already processing' });
+    await enqueueDocument(id);
 
     return res.json({ message: 'Re-indexing initiated.', status: 'processing' });
   } catch (err) {

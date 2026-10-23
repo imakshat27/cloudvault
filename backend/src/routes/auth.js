@@ -20,12 +20,12 @@ router.post('/register', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (typeof email !== 'string' || typeof password !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || Buffer.byteLength(password) > 72) {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+    if (password.length < 10) {
+      return res.status(400).json({ error: 'Password must be at least 10 characters long.' });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -64,7 +64,7 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (typeof email !== 'string' || typeof password !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || Buffer.byteLength(password) > 72) {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 

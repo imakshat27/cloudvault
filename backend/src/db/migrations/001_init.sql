@@ -50,3 +50,5 @@ CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_document_shares_doc ON document_shares(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_shares_user ON document_shares(shared_with_user_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding vector_cosine_ops);

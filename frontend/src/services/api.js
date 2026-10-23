@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:3000/api');
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 function getAuthHeader() {
   const token = localStorage.getItem('cloudvault_token');
@@ -107,6 +107,10 @@ export const api = {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('PUT', targetUrl);
+      if (!uploadUrl.startsWith('http')) {
+        const token = localStorage.getItem('cloudvault_token');
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
 
       if (onProgress) {
         xhr.upload.onprogress = (event) => {
@@ -139,13 +143,22 @@ export const api = {
     });
   },
 
-  async ask(question, limit = 4) {
+  async ask(question, limit = 6, documentId = null, history = []) {
     return request('/ask', {
       method: 'POST',
-      body: JSON.stringify({ question, limit }),
+      body: JSON.stringify({ question, limit, documentId, history }),
     });
   },
 
+  async revokeShare(documentId, shareId) {
+    return request(`/documents/${documentId}/shares/${shareId}`, { method: 'DELETE' });
+  },
+  async getDocumentText(documentId) { return request(`/documents/${documentId}/content?text=true`); },
+  async getDocumentBlob(documentId) {
+    const response = await fetch(`${API_BASE}/documents/${documentId}/content`, { headers: getAuthHeader() });
+    if (!response.ok) throw new Error('Could not open this file');
+    return response.blob();
+  },
   async getHealth() {
     return request('/health');
   }

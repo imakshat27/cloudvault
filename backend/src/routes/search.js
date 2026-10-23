@@ -18,6 +18,7 @@ router.post('/', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Search query string is required' });
     }
 
+    if (query.length > 8000) return res.status(400).json({ error: 'Query is too long' });
     const trimmedQuery = query.trim();
 
     // 1. Generate query embedding vector (1024-dim)
