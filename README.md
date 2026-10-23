@@ -64,7 +64,7 @@ flowchart LR
 
 The upload-completion API publishes the indexing event after the browser finishes its S3 PUT. Lambda extracts text, creates overlapping chunks, embeds them into 1024-dimensional vectors, and writes them to pgvector. Retrieval filters document access in the database before returning source passages to the model.
 
-The infrastructure provisions **55 resources** covering VPC networking, private compute, EC2, ALB, Auto Scaling, encrypted RDS, private S3, SQS and its DLQ, Lambda, IAM, Secrets Manager, CloudWatch, SNS, and an optional Route 53 record. It uses an existing ACM certificate, SSM's public AMI parameter, and an existing artifact bucket. See [the deployment guide](infra/AWS_SETUP_GUIDE.md) and [the class architecture report](CloudVault_System_Architecture.md).
+The infrastructure provisions **55 resources** covering VPC networking, private compute, EC2, ALB, Auto Scaling, encrypted RDS, private S3, SQS and its DLQ, Lambda, IAM, Secrets Manager, CloudWatch, SNS, and an optional Route 53 record. It uses an existing ACM certificate, SSM's public AMI parameter, and an existing artifact bucket. A smaller class-review profile reduces idle capacity while retaining the service integrations. See [the deployment guide](infra/AWS_SETUP_GUIDE.md) and [the class architecture report](CloudVault_System_Architecture.md).
 
 ## Docker
 

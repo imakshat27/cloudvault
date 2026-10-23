@@ -44,6 +44,33 @@
         "t3.medium"
       ]
     },
+    "NatGatewayCount": {
+      "Type": "String",
+      "Default": "2",
+      "AllowedValues": [
+        "1",
+        "2"
+      ],
+      "Description": "One reduces cost; two provide independent outbound routing per AZ"
+    },
+    "ApiBaselineCapacity": {
+      "Type": "String",
+      "Default": "2",
+      "AllowedValues": [
+        "1",
+        "2"
+      ],
+      "Description": "Minimum and desired API replicas"
+    },
+    "ApiMaxCapacity": {
+      "Type": "String",
+      "Default": "4",
+      "AllowedValues": [
+        "2",
+        "4"
+      ],
+      "Description": "Maximum API replicas during scaling"
+    },
     "DatabaseClass": {
       "Type": "String",
       "Default": "db.t4g.micro"
@@ -58,6 +85,14 @@
     }
   },
   "Conditions": {
+    "DualNat": {
+      "Fn::Equals": [
+        {
+          "Ref": "NatGatewayCount"
+        },
+        "2"
+      ]
+    },
     "HasHostedZone": {
       "Fn::Not": [
         {
@@ -268,7 +303,8 @@
       "Type": "AWS::EC2::EIP",
       "Properties": {
         "Domain": "vpc"
-      }
+      },
+      "Condition": "DualNat"
     },
     "Nat1": {
       "Type": "AWS::EC2::NatGateway",
@@ -283,7 +319,8 @@
           ]
         }
       },
-      "DependsOn": "GatewayAttachment"
+      "DependsOn": "GatewayAttachment",
+      "Condition": "DualNat"
     },
     "PrivateRoutes1": {
       "Type": "AWS::EC2::RouteTable",
@@ -312,7 +349,15 @@
         },
         "DestinationCidrBlock": "0.0.0.0/0",
         "NatGatewayId": {
-          "Ref": "Nat1"
+          "Fn::If": [
+            "DualNat",
+            {
+              "Ref": "Nat1"
+            },
+            {
+              "Ref": "Nat0"
+            }
+          ]
         }
       }
     },
@@ -1096,9 +1141,15 @@
     "ApiFleet": {
       "Type": "AWS::AutoScaling::AutoScalingGroup",
       "Properties": {
-        "MinSize": "2",
-        "MaxSize": "4",
-        "DesiredCapacity": "2",
+        "MinSize": {
+          "Ref": "ApiBaselineCapacity"
+        },
+        "MaxSize": {
+          "Ref": "ApiMaxCapacity"
+        },
+        "DesiredCapacity": {
+          "Ref": "ApiBaselineCapacity"
+        },
         "VPCZoneIdentifier": [
           {
             "Ref": "PrivateSubnet0"

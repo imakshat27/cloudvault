@@ -26,9 +26,12 @@ for i in range(2):
     resource(f'NatIP{i}','EC2::EIP',Domain='vpc')
     resource(f'Nat{i}','EC2::NatGateway',SubnetId=R(public),AllocationId=A(f'NatIP{i}','AllocationId'))
     resources[f'Nat{i}']['DependsOn']='GatewayAttachment'
+    if i == 1:
+        resources[f'Nat{i}']['Condition']='DualNat'
+        resources[f'NatIP{i}']['Condition']='DualNat'
     resource(f'PrivateRoutes{i}','EC2::RouteTable',VpcId=R('VPC'))
     resource(f'PrivateAssociation{i}','EC2::SubnetRouteTableAssociation',SubnetId=R(private),RouteTableId=R(f'PrivateRoutes{i}'))
-    resource(f'PrivateRoute{i}','EC2::Route',RouteTableId=R(f'PrivateRoutes{i}'),DestinationCidrBlock='0.0.0.0/0',NatGatewayId=R(f'Nat{i}'))
+    resource(f'PrivateRoute{i}','EC2::Route',RouteTableId=R(f'PrivateRoutes{i}'),DestinationCidrBlock='0.0.0.0/0',NatGatewayId=(R('Nat0') if i == 0 else {'Fn::If':['DualNat',R('Nat1'),R('Nat0')]}))
 resource('S3Endpoint','EC2::VPCEndpoint',VpcId=R('VPC'),ServiceName=S('com.amazonaws.${AWS::Region}.s3'),RouteTableIds=[R('PrivateRoutes0'),R('PrivateRoutes1')],VpcEndpointType='Gateway')
 resource('LoadBalancerSG','EC2::SecurityGroup',GroupDescription='Public HTTPS and HTTP redirect only',VpcId=R('VPC'),SecurityGroupIngress=[{'IpProtocol':'tcp','FromPort':80,'ToPort':80,'CidrIp':'0.0.0.0/0'},{'IpProtocol':'tcp','FromPort':443,'ToPort':443,'CidrIp':'0.0.0.0/0'}])
 resource('AppSG','EC2::SecurityGroup',GroupDescription='API traffic only from ALB',VpcId=R('VPC'),SecurityGroupIngress=[{'IpProtocol':'tcp','FromPort':3000,'ToPort':3000,'SourceSecurityGroupId':R('LoadBalancerSG')}])
@@ -114,7 +117,7 @@ systemctl daemon-reload
 systemctl enable --now cloudvault
 '''
 resource('LaunchTemplate','EC2::LaunchTemplate',LaunchTemplateData={'ImageId':R('AmiId'),'InstanceType':R('InstanceType'),'IamInstanceProfile':{'Arn':A('ApiProfile')},'SecurityGroupIds':[R('AppSG')],'MetadataOptions':{'HttpTokens':'required','HttpEndpoint':'enabled'},'BlockDeviceMappings':[{'DeviceName':'/dev/xvda','Ebs':{'VolumeSize':16,'VolumeType':'gp3','Encrypted':True}}],'UserData':{'Fn::Base64':S(userData)}})
-resource('ApiFleet','AutoScaling::AutoScalingGroup',MinSize='2',MaxSize='4',DesiredCapacity='2',VPCZoneIdentifier=[R('PrivateSubnet0'),R('PrivateSubnet1')],TargetGroupARNs=[R('TargetGroup')],HealthCheckType='ELB',HealthCheckGracePeriod=600,LaunchTemplate={'LaunchTemplateId':R('LaunchTemplate'),'Version':A('LaunchTemplate','LatestVersionNumber')},Tags=[{'Key':'Name','Value':'CloudVault API','PropagateAtLaunch':True}])
+resource('ApiFleet','AutoScaling::AutoScalingGroup',MinSize=R('ApiBaselineCapacity'),MaxSize=R('ApiMaxCapacity'),DesiredCapacity=R('ApiBaselineCapacity'),VPCZoneIdentifier=[R('PrivateSubnet0'),R('PrivateSubnet1')],TargetGroupARNs=[R('TargetGroup')],HealthCheckType='ELB',HealthCheckGracePeriod=600,LaunchTemplate={'LaunchTemplateId':R('LaunchTemplate'),'Version':A('LaunchTemplate','LatestVersionNumber')},Tags=[{'Key':'Name','Value':'CloudVault API','PropagateAtLaunch':True}])
 resources['ApiFleet']['DependsOn']=['PrivateRoute0','PrivateRoute1','HTTPSListener']
 resources['ApiFleet']['UpdatePolicy']={'AutoScalingRollingUpdate':{'MaxBatchSize':1,'MinInstancesInService':1,'PauseTime':'PT5M'}}
 resource('ScalingPolicy','AutoScaling::ScalingPolicy',AutoScalingGroupName=R('ApiFleet'),PolicyType='TargetTrackingScaling',TargetTrackingConfiguration={'PredefinedMetricSpecification':{'PredefinedMetricType':'ASGAverageCPUUtilization'},'TargetValue':60})
@@ -138,10 +141,13 @@ params={
     'BedrockChatModel':{'Type':'String','Description':'Converse-compatible model ID or inference profile available in your account'},
     'AmiId':{'Type':'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>','Default':'/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'},
     'InstanceType':{'Type':'String','Default':'t3.micro','AllowedValues':['t3.micro','t3.small','t3.medium']},
+    'NatGatewayCount':{'Type':'String','Default':'2','AllowedValues':['1','2'],'Description':'One reduces cost; two provide independent outbound routing per AZ'},
+    'ApiBaselineCapacity':{'Type':'String','Default':'2','AllowedValues':['1','2'],'Description':'Minimum and desired API replicas'},
+    'ApiMaxCapacity':{'Type':'String','Default':'4','AllowedValues':['2','4'],'Description':'Maximum API replicas during scaling'},
     'DatabaseClass':{'Type':'String','Default':'db.t4g.micro'},
     'DatabaseMultiAZ':{'Type':'String','Default':'true','AllowedValues':['true','false']},
 }
 outputs={'ApplicationURL':{'Value':S('https://${AppDomain}')},'ArtifactBucket':{'Value':R('ArtifactBucket')},'FilesBucket':{'Value':R('Documents')},'DeadLetterQueueURL':{'Value':R('DeadLetterQueue')},'AlarmTopicArn':{'Value':R('Alerts')},'ApiLogGroup':{'Value':R('ApiLogs')},'LoadBalancerDNS':{'Value':A('LoadBalancer','DNSName')}}
-template={'AWSTemplateFormatVersion':'2010-09-09','Description':'CloudVault: private compute and RDS, S3, SQS/Lambda, Bedrock, ALB/ASG, Secrets Manager and CloudWatch','Parameters':params,'Conditions':{'HasHostedZone':{'Fn::Not':[{'Fn::Equals':[R('HostedZoneId'),'']}]}},'Resources':resources,'Outputs':outputs}
+template={'AWSTemplateFormatVersion':'2010-09-09','Description':'CloudVault: private compute and RDS, S3, SQS/Lambda, Bedrock, ALB/ASG, Secrets Manager and CloudWatch','Parameters':params,'Conditions':{'DualNat':{'Fn::Equals':[R('NatGatewayCount'),'2']},'HasHostedZone':{'Fn::Not':[{'Fn::Equals':[R('HostedZoneId'),'']}]}},'Resources':resources,'Outputs':outputs}
 Path(__file__).with_name('cloudformation.json').write_text(json.dumps(template,indent=2)+'\n')
 print(f'Generated {len(resources)} CloudFormation resources')

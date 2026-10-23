@@ -13,6 +13,18 @@ The stack is defined in `cloudformation.json`, generated from `stack.py`. It cre
 
 No access keys or account-specific resource names belong in the repository. Prefer IAM Identity Center/SSO for CLI access and IAM roles for compute.
 
+## Review budget profile
+
+The default remains the two-AZ availability demonstration. For a small class review, merge `infra/profiles/review.json` into your private parameters file. It runs one initial EC2 instance, allows scaling to two, uses single-AZ RDS, and shares one NAT gateway across the two private subnets. It retains ALB, Auto Scaling, S3, RDS/pgvector, SQS, Lambda, Bedrock, IAM, Secrets Manager and CloudWatch.
+
+This review configuration trades resilience for lower idle spending: one API instance can cause downtime during replacement, single-AZ RDS has no standby, and a shared NAT gateway is an outbound dependency for both AZs. Cross-AZ NAT traffic can incur transfer charges. For the availability exercise, apply `infra/profiles/availability-demo.json`, then return to review settings when the exercise is complete.
+
+Check actual pricing and available promotional-credit services/expiry in your account before provisioning. Start with a short review window, keep a reserve, and configure gross-spend alerts rather than assuming credits impose a spending cap. AWS promotional credit terms generally exclude domain registration; an existing domain can supply a subdomain without purchasing a new domain.
+
+A DNS provider such as Cloudflare can keep managing your zone. Request an ACM certificate for your app subdomain in the deployment region, add its validation CNAME as **DNS only**, and later add the app CNAME to the ALB hostname. Start with that app record DNS only as well, so HTTPS and uploads can be tested directly. Do not modify existing apex, mail, or unrelated records. Leave `HostedZoneId` empty when using external DNS.
+
+Keep the actual hostname and account parameters outside Git. The profile files contain only generic capacity choices.
+
 ## 1. Build artifacts
 
 ```bash
@@ -109,6 +121,6 @@ Build and upload under a new release key, then update `AppArtifactKey` and `Work
 
 ## Cost and cleanup
 
-This is an availability demonstration, **not a promise of free-tier deployment**. NAT gateways, ALB, RDS standby, running EC2, inference, storage, logs, and network transfer can all incur charges. Use the AWS Pricing Calculator for your region and actual workload. Setting `DatabaseMultiAZ=false` reduces database redundancy; the stack still has two API instances and NAT gateways.
+This is an availability demonstration, **not a promise of free-tier deployment**. NAT gateways, ALB, RDS standby, running EC2, inference, storage, logs, and network transfer can all incur charges. Use the AWS Pricing Calculator for your region and actual workload. Setting only `DatabaseMultiAZ=false` reduces database redundancy; use the complete review profile to also reduce API and NAT capacity.
 
 To clean up, disable RDS deletion protection deliberately, then delete the CloudFormation stack after preserving what you need. Database deletion creates a snapshot. The document bucket is retained, including object versions; delete its versions and the bucket separately if you intend to erase everything. Delete release artifacts, retained snapshots, log groups, and any externally created certificate/DNS entries when appropriate. A library deletion removes the live document and search index; S3 versioning and RDS backups can retain historical copies.

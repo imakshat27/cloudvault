@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "NatGatewayCount",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "ApiBaselineCapacity",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "ApiMaxCapacity",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "DatabaseMultiAZ",
+    "ParameterValue": "false"
+  }
+]
