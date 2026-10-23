@@ -507,7 +507,8 @@
                 "PUT"
               ],
               "AllowedHeaders": [
-                "content-type"
+                "content-type",
+                "if-none-match"
               ],
               "MaxAge": 900
             }
@@ -747,7 +748,10 @@
                     "logs:DescribeLogStreams"
                   ],
                   "Resource": {
-                    "Fn::Sub": "${ApiLogs.Arn}:*"
+                    "Fn::GetAtt": [
+                      "ApiLogs",
+                      "Arn"
+                    ]
                   }
                 }
               ]
@@ -797,17 +801,12 @@
                   "Action": [
                     "secretsmanager:GetSecretValue"
                   ],
-                  "Resource": [
-                    {
-                      "Ref": "AppSecret"
-                    },
-                    {
-                      "Fn::GetAtt": [
-                        "Database",
-                        "MasterUserSecret.SecretArn"
-                      ]
-                    }
-                  ]
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Database",
+                      "MasterUserSecret.SecretArn"
+                    ]
+                  }
                 },
                 {
                   "Effect": "Allow",
@@ -919,9 +918,6 @@
                 "MasterUserSecret.SecretArn"
               ]
             },
-            "APP_SECRET_ARN": {
-              "Ref": "AppSecret"
-            },
             "STORAGE_MODE": "s3",
             "S3_BUCKET_NAME": {
               "Ref": "Documents"
@@ -935,7 +931,8 @@
             },
             "CORS_ORIGIN": {
               "Fn::Sub": "https://${AppDomain}"
-            }
+            },
+            "RUNTIME_ROLE": "worker"
           }
         }
       },

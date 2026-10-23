@@ -1,6 +1,6 @@
-import pdfParse from 'pdf-parse';
-import mammoth from 'mammoth';
-import path from 'path';
+import pdfParse from "pdf-parse";
+import mammoth from "mammoth";
+import path from "path";
 
 /**
  * Extracts plain text from PDF, DOCX, and TXT files.
@@ -10,33 +10,35 @@ export async function extractTextFromBuffer(buffer, filename) {
 
   try {
     switch (ext) {
-      case '.pdf': {
+      case ".pdf": {
         const data = await pdfParse(buffer);
         return {
           text: data.text.trim(),
           numPages: data.numpages,
-          info: data.info
+          info: data.info,
         };
       }
 
-      case '.docx': {
+      case ".docx": {
         const result = await mammoth.extractRawText({ buffer });
         return {
           text: result.value.trim(),
-          warnings: result.messages
+          warnings: result.messages,
         };
       }
 
-      case '.txt':
-      case '.md':
-      case '.json':
-      case '.csv': {
-        const text = buffer.toString('utf-8').trim();
+      case ".txt":
+      case ".md":
+      case ".json":
+      case ".csv": {
+        const text = buffer.toString("utf-8").trim();
         return { text };
       }
 
       default:
-        throw new Error(`Unsupported file extension "${ext}". Supported types: .pdf, .docx, .txt, .md`);
+        throw new Error(
+          `Unsupported file extension "${ext}". Supported types: .pdf, .docx, .txt, .md`,
+        );
     }
   } catch (err) {
     throw new Error(`Text extraction failed for ${filename}: ${err.message}`);

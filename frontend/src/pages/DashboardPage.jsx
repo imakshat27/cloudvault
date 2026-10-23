@@ -1,107 +1,1118 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Cloud, Plus, FolderClosed, MessageSquare, Users, Star, ArrowUpRight, Search, LayoutGrid, List, ChevronDown, FileText, MoreHorizontal, Upload, X, Download, Share2, Trash2, LogOut, RefreshCw, Sparkles, HardDrive, Check, PanelRightClose, PanelRightOpen, Menu, LoaderCircle, ShieldCheck, BookOpen } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import { api } from '../services/api';
-import { Chat } from '../components/Chat';
-import { Dialog } from '../components/Dialog';
+import ReactMarkdown from "react-markdown";
+import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  Cloud,
+  Plus,
+  FolderClosed,
+  MessageSquare,
+  Users,
+  Star,
+  ArrowUpRight,
+  Search,
+  LayoutGrid,
+  List,
+  ChevronDown,
+  FileText,
+  MoreHorizontal,
+  Upload,
+  X,
+  Download,
+  Share2,
+  Trash2,
+  LogOut,
+  RefreshCw,
+  Sparkles,
+  HardDrive,
+  Check,
+  PanelRightClose,
+  PanelRightOpen,
+  Menu,
+  LoaderCircle,
+  ShieldCheck,
+  BookOpen,
+} from "lucide-react";
+import { useAuth } from "../context/auth";
+import { api } from "../services/api";
+import { Chat } from "../components/Chat";
+import { Dialog } from "../components/Dialog";
 const samples = [
- ['A guide to cloud architecture.md', '# A guide to cloud architecture\n\nCloud architecture brings storage, computing, networking, and managed services together.\n\n## Resilience\nDeploy compute across multiple availability zones behind an Application Load Balancer. Auto Scaling adjusts capacity to demand. RDS Multi-AZ provides database failover. S3 durably stores documents.\n\n## Event-driven processing\nSQS decouples document uploads from indexing. Lambda extracts text, chunks it, generates embeddings using Amazon Bedrock, and writes vectors to PostgreSQL with pgvector. Failed jobs move to a dead-letter queue for inspection.\n\n## Security\nUse IAM roles instead of long-lived keys, encrypt data, and filter every search by document access permissions. CloudWatch collects logs and alarms.'],
- ['Research notes — RAG.txt', 'Retrieval-Augmented Generation\n\nRAG connects language models with a trusted collection of documents. Text is split into overlapping chunks. An embedding model represents each chunk as a vector.\n\nA question is embedded by the same model. Cosine similarity retrieves the closest permitted chunks. A generative model answers using those passages and includes citations.\n\nSemantic search matches meaning rather than exact keywords. Document sharing must apply to retrieval and downloads alike.\n\nEvaluation should check retrieval relevance, answer grounding, citation quality, and cross-user isolation.'],
- ['Project checklist.txt', 'Project checklist\n\n1. Build a secure document workspace with authentication and sharing.\n2. Upload PDF, DOCX, TXT and Markdown files.\n3. Process files asynchronously and show indexing status.\n4. Search by natural language and provide source citations.\n5. Offer a document viewer and document-scoped questions.\n6. Demonstrate S3, RDS, EC2, ALB, Auto Scaling, SQS, Lambda, IAM and CloudWatch.\n7. Monitor failed jobs and document cost tradeoffs.\n8. Verify that users cannot retrieve documents without permission.']
+  [
+    "A guide to cloud architecture.md",
+    "# A guide to cloud architecture\n\nCloud architecture brings storage, computing, networking, and managed services together.\n\n## Resilience\nDeploy compute across multiple availability zones behind an Application Load Balancer. Auto Scaling adjusts capacity to demand. RDS Multi-AZ provides database failover. S3 durably stores documents.\n\n## Event-driven processing\nSQS decouples document uploads from indexing. Lambda extracts text, chunks it, generates embeddings using Amazon Bedrock, and writes vectors to PostgreSQL with pgvector. Failed jobs move to a dead-letter queue for inspection.\n\n## Security\nUse IAM roles instead of long-lived keys, encrypt data, and filter every search by document access permissions. CloudWatch collects logs and alarms.",
+  ],
+  [
+    "Research notes — RAG.txt",
+    "Retrieval-Augmented Generation\n\nRAG connects language models with a trusted collection of documents. Text is split into overlapping chunks. An embedding model represents each chunk as a vector.\n\nA question is embedded by the same model. Cosine similarity retrieves the closest permitted chunks. A generative model answers using those passages and includes citations.\n\nSemantic search matches meaning rather than exact keywords. Document sharing must apply to retrieval and downloads alike.\n\nEvaluation should check retrieval relevance, answer grounding, citation quality, and cross-user isolation.",
+  ],
+  [
+    "Project checklist.txt",
+    "Project checklist\n\n1. Build a secure document workspace with authentication and sharing.\n2. Upload PDF, DOCX, TXT and Markdown files.\n3. Process files asynchronously and show indexing status.\n4. Search by natural language and provide source citations.\n5. Offer a document viewer and document-scoped questions.\n6. Demonstrate S3, RDS, EC2, ALB, Auto Scaling, SQS, Lambda, IAM and CloudWatch.\n7. Monitor failed jobs and document cost tradeoffs.\n8. Verify that users cannot retrieve documents without permission.",
+  ],
 ];
-const size = bytes => Number(bytes) < 1024 ? `${bytes} B` : Number(bytes) < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
-const kind = doc => doc.filename.split('.').pop().toUpperCase();
-const date = value => new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const size = (bytes) =>
+  Number(bytes) < 1024
+    ? `${bytes} B`
+    : Number(bytes) < 1048576
+      ? `${(bytes / 1024).toFixed(1)} KB`
+      : `${(bytes / 1048576).toFixed(1)} MB`;
+const kind = (doc) => doc.filename.split(".").pop().toUpperCase();
+const date = (value) =>
+  new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 export function DashboardPage() {
- const { user, logout } = useAuth();
- const [docs, setDocs] = useState([]), [loading, setLoading] = useState(true), [error, setError] = useState('');
- const [page, setPage] = useState('files'), [filter, setFilter] = useState('all'), [query, setQuery] = useState(''), [semantic, setSemantic] = useState(null), [searchBusy, setSearchBusy] = useState(false);
- const [layout, setLayout] = useState('grid'), [sort, setSort] = useState('recent'), [uploading, setUploading] = useState(false), [progress, setProgress] = useState('');
- const [uploadOpen, setUploadOpen] = useState(false), [shareDoc, setShareDoc] = useState(null), [preview, setPreview] = useState(null), [deleteDoc, setDeleteDoc] = useState(null), [busy, setBusy] = useState(false);
- const [mobileNav, setMobileNav] = useState(false), [toast, setToast] = useState(''), [health, setHealth] = useState(null);
- const [stars, setStars] = useState(() => { try { return JSON.parse(localStorage.getItem(`cv-stars-${user.id}`) || '[]'); } catch { return []; } });
- const fileInput = useRef(null);
- const fetchDocs = useCallback(async () => { try { const r = await api.listDocuments(); setDocs(r.documents); } catch (e) { setError(e.message); } finally { setLoading(false); } }, []);
- useEffect(() => { fetchDocs(); api.getHealth().then(setHealth).catch(() => {}); const timer = setInterval(fetchDocs, 4000); return () => clearInterval(timer); }, [fetchDocs]);
- useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 4000); return () => clearTimeout(t); }, [toast]);
- const readyCount = docs.filter(d => d.status === 'ready').length;
- function navigate(next) { setPage(next); setQuery(''); setSemantic(null); setMobileNav(false); }
- function toggleStar(id) { const next = stars.includes(id) ? stars.filter(x => x !== id) : [...stars, id]; setStars(next); localStorage.setItem(`cv-stars-${user.id}`, JSON.stringify(next)); }
- async function upload(files) {
-  if (!files?.length) return;
-  setUploading(true); setError('');
-  try {
-   for (const file of files) {
-    if (file.size > 25 * 1024 * 1024 || file.size === 0) throw new Error('Choose a file between 1 byte and 25 MB.');
-    setProgress(`Uploading ${file.name}…`);
-    const r = await api.getUploadUrl({ filename: file.name, fileSize: file.size, mimeType: file.type });
-    await api.uploadFileToUrl(r.uploadUrl, file, n => setProgress(`${file.name} · ${n}%`));
-    await api.completeUpload(r.documentId, { fileSize: file.size, mimeType: file.type || 'application/octet-stream' });
-   }
-   setToast('Files uploaded. We’re getting them ready for your questions.'); setUploadOpen(false); await fetchDocs();
-  } catch (e) { setError(e.message); } finally { setUploading(false); setProgress(''); if (fileInput.current) fileInput.current.value = ''; }
- }
- async function addSamples() { await upload(samples.map(([name, text]) => new File([text], name, { type: 'text/plain' }))); }
- async function search(e) {
-  e.preventDefault(); if (!query.trim()) { setSemantic(null); return; }
-  setSearchBusy(true); setError('');
-  try { const r = await api.search(query, 30); const ids = [...new Set(r.results.map(x => x.documentId || x.document_id))]; setSemantic(ids); }
-  catch (e) { setError(e.message); } finally { setSearchBusy(false); }
- }
- async function remove() { setBusy(true); try { await api.deleteDocument(deleteDoc.id); setDeleteDoc(null); setToast('File deleted.'); await fetchDocs(); } catch (e) { setError(e.message); } finally { setBusy(false); } }
- async function download(doc) { try { const blob = await api.getDocumentBlob(doc.id); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = doc.filename; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); } catch (e) { setError(e.message); } }
- async function retry(doc) { try { await api.reindexDocument(doc.id); setToast('Indexing queued.'); await fetchDocs(); } catch (e) { setError(e.message); } }
- function open(id) { const doc = docs.find(d => d.id === id); if (doc) setPreview(doc); else setToast('This source is no longer available. Refresh your files.'); }
- let visible = docs.filter(d => page !== 'shared' || !d.is_owner).filter(d => page !== 'starred' || stars.includes(d.id)).filter(d => filter === 'all' || kind(d).toLowerCase() === filter).filter(d => semantic ? semantic.includes(d.id) : d.filename.toLowerCase().includes(query.toLowerCase()));
- visible.sort((a, b) => semantic ? semantic.indexOf(a.id) - semantic.indexOf(b.id) : sort === 'name' ? a.filename.localeCompare(b.filename) : new Date(b.uploaded_at) - new Date(a.uploaded_at));
- const totalBytes = docs.filter(d => d.is_owner).reduce((n, d) => n + Number(d.file_size), 0);
- return <div className="workspace"><a className="skip-link" href="#main">Skip to content</a>
-  {mobileNav && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMobileNav(false)}/>}
-  <aside className={`sidebar ${mobileNav ? 'open' : ''}`}><a className="brand" href="/" onClick={e => { e.preventDefault(); navigate('files'); }}><span className="brand-mark"><Cloud size={24}/></span>CloudVault<span className="brand-dot">.</span></a>
-   <div className="workspace-label"><span className="workspace-avatar">W</span><div>Personal workspace<small>Your ideas live here</small></div><ShieldCheck size={16}/></div>
-   <button className="primary upload-main" onClick={() => { setUploadOpen(true); setMobileNav(false); }}><Plus size={19}/> Upload files</button>
-   <span className="nav-label">WORKSPACE</span><nav>{[['files', FolderClosed, 'All files'], ['chat', MessageSquare, 'Research chat'], ['shared', Users, 'Shared with me'], ['starred', Star, 'Starred']].map(([id, Icon, label]) => <button key={id} className={`nav-item ${page === id ? 'active' : ''}`} aria-current={page === id ? 'page' : undefined} onClick={() => navigate(id)}><Icon size={19}/>{label}{id === 'files' && <span>{docs.length}</span>}{id === 'chat' && <span className="new-badge">AI</span>}</button>)}</nav>
-   <div className="sidebar-tip"><span className="tip-icon"><Sparkles size={20}/></span><strong>A thought away.</strong><p>Your next answer might already be in your files.</p><button onClick={() => navigate('chat')}>Ask your workspace<ArrowUpRight size={16}/></button></div>
-   <div className="storage-info"><div><HardDrive size={16}/><span>Workspace storage</span></div><strong>{size(totalBytes)} <small>across {docs.filter(d => d.is_owner).length} files</small></strong><p><span className="status-dot"/>{health?.storageMode === 'AWS S3' ? 'Connected to Amazon S3' : 'Local development storage'}</p></div>
-   <div className="profile"><span className="avatar">{user.email[0].toUpperCase()}</span><div><strong>My account</strong><small title={user.email}>{user.email}</small></div><button className="icon-button" aria-label="Sign out" title="Sign out" onClick={logout}><LogOut size={18}/></button></div>
-  </aside>
-  <div className="main-shell"><header className="topbar"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={21}/></button><span className="breadcrumb">Workspace <span>/</span> <strong>{page === 'chat' ? 'Research chat' : page === 'shared' ? 'Shared with me' : page === 'starred' ? 'Starred' : 'All files'}</strong></span><div className="topbar-right"><span className="private-badge"><ShieldCheck size={14}/> Private workspace</span><span className="avatar small">{user.email[0].toUpperCase()}</span></div></header>
-   <main id="main" className={page === 'chat' ? 'chat-page' : 'files-page'}>
-    {health?.aiEngine === 'local' && <div className="mode-note"><span className="status-dot"/>Local retrieval mode <span>Connect Amazon Bedrock for semantic search and AI answers.</span></div>}
-    {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={17}/></button></div>}
-    {page === 'chat' ? <Chat readyCount={readyCount} onOpen={open}/> : <>
-     <div className="page-heading"><div><span className="eyebrow">A HOME FOR EVERYTHING YOU KNOW</span><h1>{page === 'files' ? 'Your files, a little smarter.' : page === 'shared' ? 'Great ideas travel together.' : 'The ones worth keeping.'}</h1><p>{page === 'files' ? 'Less digging. More discovering. Pick up where your curiosity left off.' : page === 'shared' ? 'Documents others have invited you to explore.' : 'Your most useful sources, close at hand.'}</p></div><button className="secondary" onClick={() => navigate('chat')}><Sparkles size={17}/> Ask your files<ArrowUpRight size={16}/></button></div>
-     {page === 'files' && <section className="discovery-banner"><div className="discovery-content"><span className="pill"><Sparkles size={13}/> MEET YOUR KNOWLEDGE COMPANION</span><h2>Don’t just store it.<br/><span>Make something of it.</span></h2><p>A question, a connection, a fresh perspective.<br/>Start a conversation with your documents.</p><button onClick={() => navigate('chat')}>Let’s explore<ArrowUpRight size={17}/></button></div><div className="discovery-art" aria-hidden="true"><div className="art-orbit orbit-one"/><div className="art-orbit orbit-two"/><div className="art-doc doc-back"><FileText size={27}/><span/><span/><span/></div><div className="art-doc doc-front"><span className="art-doc-icon"><Sparkles size={26}/></span><span/><span/><span/></div><div className="art-bubble"><Sparkles size={16}/> Connect the dots.</div><span className="art-star star-one">✦</span><span className="art-star star-two">✦</span></div></section>}
-     <section className="file-library" aria-label="File library"><div className="library-heading"><h2>{page === 'files' ? 'Your library' : page === 'shared' ? 'Shared files' : 'Starred files'} <span>{visible.length}</span></h2><div className="view-tools"><button className="icon-button" aria-label="Refresh files" onClick={fetchDocs}><RefreshCw size={16}/></button><div className="view-toggle"><button aria-label="Grid view" aria-pressed={layout === 'grid'} className={layout === 'grid' ? 'selected' : ''} onClick={() => setLayout('grid')}><LayoutGrid size={16}/></button><button aria-label="List view" aria-pressed={layout === 'list'} className={layout === 'list' ? 'selected' : ''} onClick={() => setLayout('list')}><List size={18}/></button></div></div></div>
-      <div className="library-toolbar"><div className="file-filters" aria-label="Filter by file type">{[['all', 'All files'], ['pdf', 'PDF'], ['docx', 'Documents'], ['txt', 'Text'], ['md', 'Markdown']].map(([value, label]) => <button key={value} aria-pressed={filter === value} className={filter === value ? 'selected' : ''} onClick={() => setFilter(value)}>{label}</button>)}</div><label className="sort-control"><span className="sr-only">Sort files</span><select value={sort} onChange={e => setSort(e.target.value)}><option value="recent">Last added</option><option value="name">Name A–Z</option></select><ChevronDown size={13}/></label></div>
-      <form className="file-search" onSubmit={search}><Search size={18}/><label className="sr-only" htmlFor="file-search">Find files by name or ask a natural language question</label><input id="file-search" placeholder="Search a filename, or describe what you’re looking for…" value={query} onChange={e => { setQuery(e.target.value); setSemantic(null); }}/>{query && <button type="button" className="icon-button" aria-label="Clear search" onClick={() => { setQuery(''); setSemantic(null); }}><X size={16}/></button>}<button className="search-action" disabled={searchBusy || !query.trim()}>{searchBusy ? 'Searching…' : 'Search contents'}<ArrowUpRight size={14}/></button></form>
-      {semantic && <p className="search-caption">Content matches for “{query}” · {health?.aiEngine === 'bedrock' ? 'Semantic relevance' : 'Local lexical relevance'}</p>}
-      {loading ? <div className="empty-state" role="status"><LoaderCircle className="spin"/><h3>Opening your workspace…</h3></div> : visible.length ? <div className={`file-collection ${layout}`}>{visible.map(doc => <article key={doc.id} className="file-card"><button className="file-open" onClick={() => setPreview(doc)} aria-label={`Open ${doc.filename}`}><div className={`file-preview type-${kind(doc).toLowerCase()}`}><span className="file-type-tag">{kind(doc)}</span><div className="paper-thumbnail"><FileText size={27}/><span/><span/><span/><span/><span/></div>{doc.status === 'ready' && <span className="preview-ready"><Sparkles size={12}/>Ready to chat</span>}</div><div className="file-details"><span className={`file-icon ${kind(doc).toLowerCase()}`}><FileText size={19}/></span><div><h3 title={doc.filename}>{doc.filename}</h3><p>{size(doc.file_size)}<span>·</span>{date(doc.uploaded_at)}{!doc.is_owner && <><span>·</span>Shared</>}</p></div></div></button><div className="file-card-footer"><span className={`file-status ${doc.status}`}>{doc.status === 'ready' ? <><span className="status-dot"/> Indexed</> : doc.status === 'failed' ? 'Indexing failed' : <><LoaderCircle size={12} className="spin"/>{doc.status === 'pending' ? 'Awaiting upload' : 'Getting ready'}</>}</span><div className="file-actions">{doc.status === 'failed' && doc.is_owner && <button className="icon-button" aria-label={`Retry indexing ${doc.filename}`} onClick={() => retry(doc)}><RefreshCw size={15}/></button>}<button className={`icon-button ${stars.includes(doc.id) ? 'starred' : ''}`} aria-label={`${stars.includes(doc.id) ? 'Unstar' : 'Star'} ${doc.filename}`} aria-pressed={stars.includes(doc.id)} onClick={() => toggleStar(doc.id)}><Star size={16} fill={stars.includes(doc.id) ? 'currentColor' : 'none'}/></button>{doc.is_owner && <button className="icon-button" aria-label={`Share ${doc.filename}`} onClick={() => setShareDoc(doc)}><Share2 size={16}/></button>}<details className="file-menu"><summary aria-label={`More actions for ${doc.filename}`}><MoreHorizontal size={18}/></summary><div><button onClick={() => download(doc)}><Download size={15}/>Download</button>{doc.is_owner && <button onClick={() => setDeleteDoc(doc)}><Trash2 size={15}/>Delete file</button>}</div></details></div></div></article>)}</div> : <div className="empty-state"><span className="empty-icon">{page === 'starred' ? <Star/> : page === 'shared' ? <Users/> : <FolderClosed/>}</span><h3>{query || filter !== 'all' ? 'No files found' : page === 'shared' ? 'A little collaboration goes a long way.' : page === 'starred' ? 'Keep your favorites close.' : 'Every good idea starts somewhere.'}</h3><p>{query || filter !== 'all' ? 'Try another filename or search inside your documents.' : page === 'shared' ? 'When someone shares a file with your account, it will appear here.' : page === 'starred' ? 'Select the star on any file to save it here.' : 'Drop in your first document and see where it takes you.'}</p>{page === 'files' && !query && filter === 'all' && <div className="empty-actions"><button className="primary" onClick={() => setUploadOpen(true)}><Plus size={17}/>Upload files</button><button className="secondary" disabled={uploading} onClick={addSamples}><BookOpen size={17}/>{uploading ? 'Adding samples…' : 'Try sample files'}</button></div>}</div>}
-     </section><footer className="library-footer"><ShieldCheck size={14}/>Only you and the people you invite can access your files.<span>{docs.length} files · {readyCount} ready to explore</span></footer>
-    </>}
-   </main>
-  </div>
-  {toast && <div className="toast" role="status"><Check size={17}/>{toast}</div>}
-  {uploadOpen && <Dialog title="A new home for your files" onClose={() => { if (!uploading) setUploadOpen(false); }}><p className="muted">Upload a document. We’ll make it ready for questions.</p><button className="dropzone" disabled={uploading} onClick={() => fileInput.current.click()} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!uploading) upload([...e.dataTransfer.files]); }}><span className="empty-icon"><Upload size={27}/></span><strong>{uploading ? progress : 'Choose files or drop them here'}</strong><span>PDF, DOCX, TXT or Markdown · up to 25 MB each</span></button><input ref={fileInput} type="file" className="sr-only" multiple accept=".pdf,.docx,.txt,.md" onChange={e => upload([...e.target.files])}/>{error && <p className="error" role="alert">{error}</p>}<div className="upload-note"><Sparkles size={17}/><span>Text is indexed for search and document chat. Scanned PDFs need OCR before uploading.</span></div></Dialog>}
-  {shareDoc && <ShareDialog doc={shareDoc} onClose={() => setShareDoc(null)}/>}
-  {preview && <Viewer doc={docs.find(d => d.id === preview.id) || preview} onClose={() => setPreview(null)} onDownload={download} onShare={doc => setShareDoc(doc)} onOpen={open} onRetry={retry}/>}
-  {deleteDoc && <Dialog title="Delete this file?" onClose={() => setDeleteDoc(null)}><p>“{deleteDoc.filename}” and its searchable passages will be permanently removed. People you shared it with will lose access.</p><div className="dialog-actions"><button className="secondary" onClick={() => setDeleteDoc(null)}>Keep file</button><button className="danger" disabled={busy} onClick={remove}>{busy ? 'Deleting…' : 'Delete file'}</button></div></Dialog>}
- </div>;
+  const { user, logout } = useAuth();
+  const [docs, setDocs] = useState([]),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState("");
+  const [page, setPage] = useState("files"),
+    [filter, setFilter] = useState("all"),
+    [query, setQuery] = useState(""),
+    [semantic, setSemantic] = useState(null),
+    [searchBusy, setSearchBusy] = useState(false);
+  const [layout, setLayout] = useState("grid"),
+    [sort, setSort] = useState("recent"),
+    [uploading, setUploading] = useState(false),
+    [progress, setProgress] = useState("");
+  const [uploadOpen, setUploadOpen] = useState(false),
+    [shareDoc, setShareDoc] = useState(null),
+    [preview, setPreview] = useState(null),
+    [deleteDoc, setDeleteDoc] = useState(null),
+    [busy, setBusy] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false),
+    [toast, setToast] = useState(""),
+    [health, setHealth] = useState(null);
+  const [stars, setStars] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(`cv-stars-${user.id}`) || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const fileInput = useRef(null);
+  const fetchDocs = useCallback(async () => {
+    try {
+      const r = await api.listDocuments();
+      setDocs(r.documents);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    api
+      .listDocuments()
+      .then((r) => setDocs(r.documents))
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+    api
+      .getHealth()
+      .then(setHealth)
+      .catch(() => {});
+    const timer = setInterval(fetchDocs, 4000);
+    return () => clearInterval(timer);
+  }, [fetchDocs]);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
+  const readyCount = docs.filter((d) => d.status === "ready").length;
+  function navigate(next) {
+    setPage(next);
+    setQuery("");
+    setSemantic(null);
+    setMobileNav(false);
+  }
+  function toggleStar(id) {
+    const next = stars.includes(id)
+      ? stars.filter((x) => x !== id)
+      : [...stars, id];
+    setStars(next);
+    localStorage.setItem(`cv-stars-${user.id}`, JSON.stringify(next));
+  }
+  async function upload(files) {
+    if (!files?.length) return;
+    setUploading(true);
+    setError("");
+    try {
+      for (const file of files) {
+        if (file.size > 25 * 1024 * 1024 || file.size === 0)
+          throw new Error("Choose a file between 1 byte and 25 MB.");
+        setProgress(`Uploading ${file.name}…`);
+        const r = await api.getUploadUrl({
+          filename: file.name,
+          fileSize: file.size,
+          mimeType: file.type,
+        });
+        await api.uploadFileToUrl(
+          r.uploadUrl,
+          file,
+          (n) => setProgress(`${file.name} · ${n}%`),
+          r.mimeType,
+        );
+        await api.completeUpload(r.documentId, {
+          fileSize: file.size,
+          mimeType: file.type || "application/octet-stream",
+        });
+      }
+      setToast("Files uploaded. We’re getting them ready for your questions.");
+      setUploadOpen(false);
+      await fetchDocs();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setUploading(false);
+      setProgress("");
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  }
+  async function addSamples() {
+    await upload(
+      samples.map(
+        ([name, text]) => new File([text], name, { type: "text/plain" }),
+      ),
+    );
+  }
+  async function search(e) {
+    e.preventDefault();
+    if (!query.trim()) {
+      setSemantic(null);
+      return;
+    }
+    setSearchBusy(true);
+    setError("");
+    try {
+      const r = await api.search(query, 30);
+      const ids = [
+        ...new Set(r.results.map((x) => x.documentId || x.document_id)),
+      ];
+      setSemantic(ids);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSearchBusy(false);
+    }
+  }
+  async function remove() {
+    setBusy(true);
+    try {
+      await api.deleteDocument(deleteDoc.id);
+      setDeleteDoc(null);
+      setToast("File deleted.");
+      await fetchDocs();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function download(doc) {
+    try {
+      const blob = await api.getDocumentBlob(doc.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = doc.filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  async function retry(doc) {
+    try {
+      await api.reindexDocument(doc.id);
+      setToast("Indexing queued.");
+      await fetchDocs();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  function open(id) {
+    const doc = docs.find((d) => d.id === id);
+    if (doc) setPreview(doc);
+    else setToast("This source is no longer available. Refresh your files.");
+  }
+  let visible = docs
+    .filter((d) => page !== "shared" || !d.is_owner)
+    .filter((d) => page !== "starred" || stars.includes(d.id))
+    .filter((d) => filter === "all" || kind(d).toLowerCase() === filter)
+    .filter((d) =>
+      semantic
+        ? semantic.includes(d.id)
+        : d.filename.toLowerCase().includes(query.toLowerCase()),
+    );
+  visible.sort((a, b) =>
+    semantic
+      ? semantic.indexOf(a.id) - semantic.indexOf(b.id)
+      : sort === "name"
+        ? a.filename.localeCompare(b.filename)
+        : new Date(b.uploaded_at) - new Date(a.uploaded_at),
+  );
+  const totalBytes = docs
+    .filter((d) => d.is_owner)
+    .reduce((n, d) => n + Number(d.file_size), 0);
+  return (
+    <div className="workspace">
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
+      {mobileNav && (
+        <button
+          className="nav-scrim"
+          aria-label="Close navigation"
+          onClick={() => setMobileNav(false)}
+        />
+      )}
+      <aside className={`sidebar ${mobileNav ? "open" : ""}`}>
+        <a
+          className="brand"
+          href="/"
+          onClick={(e) => {
+            e.preventDefault();
+            navigate("files");
+          }}
+        >
+          <span className="brand-mark">
+            <Cloud size={24} />
+          </span>
+          CloudVault<span className="brand-dot">.</span>
+        </a>
+        <div className="workspace-label">
+          <span className="workspace-avatar">W</span>
+          <div>
+            Personal workspace<small>Your ideas live here</small>
+          </div>
+          <ShieldCheck size={16} />
+        </div>
+        <button
+          className="primary upload-main"
+          onClick={() => {
+            setUploadOpen(true);
+            setMobileNav(false);
+          }}
+        >
+          <Plus size={19} /> Upload files
+        </button>
+        <span className="nav-label">WORKSPACE</span>
+        <nav>
+          {[
+            ["files", FolderClosed, "All files"],
+            ["chat", MessageSquare, "Research chat"],
+            ["shared", Users, "Shared with me"],
+            ["starred", Star, "Starred"],
+          ].map(([id, Icon, label]) => (
+            <button
+              key={id}
+              className={`nav-item ${page === id ? "active" : ""}`}
+              aria-current={page === id ? "page" : undefined}
+              onClick={() => navigate(id)}
+            >
+              <Icon size={19} />
+              {label}
+              {id === "files" && <span>{docs.length}</span>}
+              {id === "chat" && <span className="new-badge">AI</span>}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-tip">
+          <span className="tip-icon">
+            <Sparkles size={20} />
+          </span>
+          <strong>A thought away.</strong>
+          <p>Your next answer might already be in your files.</p>
+          <button onClick={() => navigate("chat")}>
+            Ask your workspace
+            <ArrowUpRight size={16} />
+          </button>
+        </div>
+        <div className="storage-info">
+          <div>
+            <HardDrive size={16} />
+            <span>Workspace storage</span>
+          </div>
+          <strong>
+            {size(totalBytes)}{" "}
+            <small>across {docs.filter((d) => d.is_owner).length} files</small>
+          </strong>
+          <p>
+            <span className="status-dot" />
+            {health?.storageMode === "AWS S3"
+              ? "Connected to Amazon S3"
+              : "Local development storage"}
+          </p>
+        </div>
+        <div className="profile">
+          <span className="avatar">{user.email[0].toUpperCase()}</span>
+          <div>
+            <strong>My account</strong>
+            <small title={user.email}>{user.email}</small>
+          </div>
+          <button
+            className="icon-button"
+            aria-label="Sign out"
+            title="Sign out"
+            onClick={logout}
+          >
+            <LogOut size={18} />
+          </button>
+        </div>
+      </aside>
+      <div className="main-shell">
+        <header className="topbar">
+          <button
+            className="icon-button mobile-menu"
+            aria-label="Open navigation"
+            onClick={() => setMobileNav(true)}
+          >
+            <Menu size={21} />
+          </button>
+          <span className="breadcrumb">
+            Workspace <span>/</span>{" "}
+            <strong>
+              {page === "chat"
+                ? "Research chat"
+                : page === "shared"
+                  ? "Shared with me"
+                  : page === "starred"
+                    ? "Starred"
+                    : "All files"}
+            </strong>
+          </span>
+          <div className="topbar-right">
+            <span className="private-badge">
+              <ShieldCheck size={14} /> Private workspace
+            </span>
+            <span className="avatar small">{user.email[0].toUpperCase()}</span>
+          </div>
+        </header>
+        <main
+          id="main"
+          className={page === "chat" ? "chat-page" : "files-page"}
+        >
+          {health?.aiEngine === "local" && (
+            <div className="mode-note">
+              <span className="status-dot" />
+              Local retrieval mode{" "}
+              <span>
+                Connect Amazon Bedrock for semantic search and AI answers.
+              </span>
+            </div>
+          )}
+          {error && (
+            <div className="error-banner" role="alert">
+              <span>{error}</span>
+              <button
+                className="icon-button"
+                aria-label="Dismiss error"
+                onClick={() => setError("")}
+              >
+                <X size={17} />
+              </button>
+            </div>
+          )}
+          {page === "chat" ? (
+            <Chat readyCount={readyCount} onOpen={open} />
+          ) : (
+            <>
+              <div className="page-heading">
+                <div>
+                  <span className="eyebrow">
+                    A HOME FOR EVERYTHING YOU KNOW
+                  </span>
+                  <h1>
+                    {page === "files"
+                      ? "Your files, a little smarter."
+                      : page === "shared"
+                        ? "Great ideas travel together."
+                        : "The ones worth keeping."}
+                  </h1>
+                  <p>
+                    {page === "files"
+                      ? "Less digging. More discovering. Pick up where your curiosity left off."
+                      : page === "shared"
+                        ? "Documents others have invited you to explore."
+                        : "Your most useful sources, close at hand."}
+                  </p>
+                </div>
+                <button className="secondary" onClick={() => navigate("chat")}>
+                  <Sparkles size={17} /> Ask your files
+                  <ArrowUpRight size={16} />
+                </button>
+              </div>
+              {page === "files" && (
+                <section className="discovery-banner">
+                  <div className="discovery-content">
+                    <span className="pill">
+                      <Sparkles size={13} /> MEET YOUR KNOWLEDGE COMPANION
+                    </span>
+                    <h2>
+                      Don’t just store it.
+                      <br />
+                      <span>Make something of it.</span>
+                    </h2>
+                    <p>
+                      A question, a connection, a fresh perspective.
+                      <br />
+                      Start a conversation with your documents.
+                    </p>
+                    <button onClick={() => navigate("chat")}>
+                      Let’s explore
+                      <ArrowUpRight size={17} />
+                    </button>
+                  </div>
+                  <div className="discovery-art" aria-hidden="true">
+                    <div className="art-orbit orbit-one" />
+                    <div className="art-orbit orbit-two" />
+                    <div className="art-doc doc-back">
+                      <FileText size={27} />
+                      <span />
+                      <span />
+                      <span />
+                    </div>
+                    <div className="art-doc doc-front">
+                      <span className="art-doc-icon">
+                        <Sparkles size={26} />
+                      </span>
+                      <span />
+                      <span />
+                      <span />
+                    </div>
+                    <div className="art-bubble">
+                      <Sparkles size={16} /> Connect the dots.
+                    </div>
+                    <span className="art-star star-one">✦</span>
+                    <span className="art-star star-two">✦</span>
+                  </div>
+                </section>
+              )}
+              <section className="file-library" aria-label="File library">
+                <div className="library-heading">
+                  <h2>
+                    {page === "files"
+                      ? "Your library"
+                      : page === "shared"
+                        ? "Shared files"
+                        : "Starred files"}{" "}
+                    <span>{visible.length}</span>
+                  </h2>
+                  <div className="view-tools">
+                    <button
+                      className="icon-button"
+                      aria-label="Refresh files"
+                      onClick={fetchDocs}
+                    >
+                      <RefreshCw size={16} />
+                    </button>
+                    <div className="view-toggle">
+                      <button
+                        aria-label="Grid view"
+                        aria-pressed={layout === "grid"}
+                        className={layout === "grid" ? "selected" : ""}
+                        onClick={() => setLayout("grid")}
+                      >
+                        <LayoutGrid size={16} />
+                      </button>
+                      <button
+                        aria-label="List view"
+                        aria-pressed={layout === "list"}
+                        className={layout === "list" ? "selected" : ""}
+                        onClick={() => setLayout("list")}
+                      >
+                        <List size={18} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="library-toolbar">
+                  <div
+                    className="file-filters"
+                    aria-label="Filter by file type"
+                  >
+                    {[
+                      ["all", "All files"],
+                      ["pdf", "PDF"],
+                      ["docx", "Documents"],
+                      ["txt", "Text"],
+                      ["md", "Markdown"],
+                    ].map(([value, label]) => (
+                      <button
+                        key={value}
+                        aria-pressed={filter === value}
+                        className={filter === value ? "selected" : ""}
+                        onClick={() => setFilter(value)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="sort-control">
+                    <span className="sr-only">Sort files</span>
+                    <select
+                      value={sort}
+                      onChange={(e) => setSort(e.target.value)}
+                    >
+                      <option value="recent">Last added</option>
+                      <option value="name">Name A–Z</option>
+                    </select>
+                    <ChevronDown size={13} />
+                  </label>
+                </div>
+                <form className="file-search" onSubmit={search}>
+                  <Search size={18} />
+                  <label className="sr-only" htmlFor="file-search">
+                    Find files by name or ask a natural language question
+                  </label>
+                  <input
+                    id="file-search"
+                    placeholder="Search a filename, or describe what you’re looking for…"
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      setSemantic(null);
+                    }}
+                  />
+                  {query && (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label="Clear search"
+                      onClick={() => {
+                        setQuery("");
+                        setSemantic(null);
+                      }}
+                    >
+                      <X size={16} />
+                    </button>
+                  )}
+                  <button
+                    className="search-action"
+                    disabled={searchBusy || !query.trim()}
+                  >
+                    {searchBusy ? "Searching…" : "Search contents"}
+                    <ArrowUpRight size={14} />
+                  </button>
+                </form>
+                {semantic && (
+                  <p className="search-caption">
+                    Content matches for “{query}” ·{" "}
+                    {health?.aiEngine === "bedrock"
+                      ? "Semantic relevance"
+                      : "Local lexical relevance"}
+                  </p>
+                )}
+                {loading ? (
+                  <div className="empty-state" role="status">
+                    <LoaderCircle className="spin" />
+                    <h3>Opening your workspace…</h3>
+                  </div>
+                ) : visible.length ? (
+                  <div className={`file-collection ${layout}`}>
+                    {visible.map((doc) => (
+                      <article key={doc.id} className="file-card">
+                        <button
+                          className="file-open"
+                          onClick={() => setPreview(doc)}
+                          aria-label={`Open ${doc.filename}`}
+                        >
+                          <div
+                            className={`file-preview type-${kind(doc).toLowerCase()}`}
+                          >
+                            <span className="file-type-tag">{kind(doc)}</span>
+                            <div className="paper-thumbnail">
+                              <FileText size={27} />
+                              <span />
+                              <span />
+                              <span />
+                              <span />
+                              <span />
+                            </div>
+                            {doc.status === "ready" && (
+                              <span className="preview-ready">
+                                <Sparkles size={12} />
+                                Ready to chat
+                              </span>
+                            )}
+                          </div>
+                          <div className="file-details">
+                            <span
+                              className={`file-icon ${kind(doc).toLowerCase()}`}
+                            >
+                              <FileText size={19} />
+                            </span>
+                            <div>
+                              <h3 title={doc.filename}>{doc.filename}</h3>
+                              <p>
+                                {size(doc.file_size)}
+                                <span>·</span>
+                                {date(doc.uploaded_at)}
+                                {!doc.is_owner && (
+                                  <>
+                                    <span>·</span>Shared
+                                  </>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                        <div className="file-card-footer">
+                          <span className={`file-status ${doc.status}`}>
+                            {doc.status === "ready" ? (
+                              <>
+                                <span className="status-dot" /> Indexed
+                              </>
+                            ) : doc.status === "failed" ? (
+                              "Indexing failed"
+                            ) : (
+                              <>
+                                <LoaderCircle size={12} className="spin" />
+                                {doc.status === "pending"
+                                  ? "Awaiting upload"
+                                  : "Getting ready"}
+                              </>
+                            )}
+                          </span>
+                          <div className="file-actions">
+                            {doc.status === "failed" && doc.is_owner && (
+                              <button
+                                className="icon-button"
+                                aria-label={`Retry indexing ${doc.filename}`}
+                                onClick={() => retry(doc)}
+                              >
+                                <RefreshCw size={15} />
+                              </button>
+                            )}
+                            <button
+                              className={`icon-button ${stars.includes(doc.id) ? "starred" : ""}`}
+                              aria-label={`${stars.includes(doc.id) ? "Unstar" : "Star"} ${doc.filename}`}
+                              aria-pressed={stars.includes(doc.id)}
+                              onClick={() => toggleStar(doc.id)}
+                            >
+                              <Star
+                                size={16}
+                                fill={
+                                  stars.includes(doc.id)
+                                    ? "currentColor"
+                                    : "none"
+                                }
+                              />
+                            </button>
+                            {doc.is_owner && (
+                              <button
+                                className="icon-button"
+                                aria-label={`Share ${doc.filename}`}
+                                onClick={() => setShareDoc(doc)}
+                              >
+                                <Share2 size={16} />
+                              </button>
+                            )}
+                            <details className="file-menu">
+                              <summary
+                                aria-label={`More actions for ${doc.filename}`}
+                              >
+                                <MoreHorizontal size={18} />
+                              </summary>
+                              <div>
+                                <button onClick={() => download(doc)}>
+                                  <Download size={15} />
+                                  Download
+                                </button>
+                                {doc.is_owner && (
+                                  <button onClick={() => setDeleteDoc(doc)}>
+                                    <Trash2 size={15} />
+                                    Delete file
+                                  </button>
+                                )}
+                              </div>
+                            </details>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <span className="empty-icon">
+                      {page === "starred" ? (
+                        <Star />
+                      ) : page === "shared" ? (
+                        <Users />
+                      ) : (
+                        <FolderClosed />
+                      )}
+                    </span>
+                    <h3>
+                      {query || filter !== "all"
+                        ? "No files found"
+                        : page === "shared"
+                          ? "A little collaboration goes a long way."
+                          : page === "starred"
+                            ? "Keep your favorites close."
+                            : "Every good idea starts somewhere."}
+                    </h3>
+                    <p>
+                      {query || filter !== "all"
+                        ? "Try another filename or search inside your documents."
+                        : page === "shared"
+                          ? "When someone shares a file with your account, it will appear here."
+                          : page === "starred"
+                            ? "Select the star on any file to save it here."
+                            : "Drop in your first document and see where it takes you."}
+                    </p>
+                    {page === "files" && !query && filter === "all" && (
+                      <div className="empty-actions">
+                        <button
+                          className="primary"
+                          onClick={() => setUploadOpen(true)}
+                        >
+                          <Plus size={17} />
+                          Upload files
+                        </button>
+                        <button
+                          className="secondary"
+                          disabled={uploading}
+                          onClick={addSamples}
+                        >
+                          <BookOpen size={17} />
+                          {uploading ? "Adding samples…" : "Try sample files"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+              <footer className="library-footer">
+                <ShieldCheck size={14} />
+                Only you and the people you invite can access your files.
+                <span>
+                  {docs.length} files · {readyCount} ready to explore
+                </span>
+              </footer>
+            </>
+          )}
+        </main>
+      </div>
+      {toast && (
+        <div className="toast" role="status">
+          <Check size={17} />
+          {toast}
+        </div>
+      )}
+      {uploadOpen && (
+        <Dialog
+          title="A new home for your files"
+          onClose={() => {
+            if (!uploading) setUploadOpen(false);
+          }}
+        >
+          <p className="muted">
+            Upload a document. We’ll make it ready for questions.
+          </p>
+          <button
+            className="dropzone"
+            disabled={uploading}
+            onClick={() => fileInput.current.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (!uploading) upload([...e.dataTransfer.files]);
+            }}
+          >
+            <span className="empty-icon">
+              <Upload size={27} />
+            </span>
+            <strong>
+              {uploading ? progress : "Choose files or drop them here"}
+            </strong>
+            <span>PDF, DOCX, TXT or Markdown · up to 25 MB each</span>
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            className="sr-only"
+            multiple
+            accept=".pdf,.docx,.txt,.md"
+            onChange={(e) => upload([...e.target.files])}
+          />
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="upload-note">
+            <Sparkles size={17} />
+            <span>
+              Text is indexed for search and document chat. Scanned PDFs need
+              OCR before uploading.
+            </span>
+          </div>
+        </Dialog>
+      )}
+      {shareDoc && (
+        <ShareDialog doc={shareDoc} onClose={() => setShareDoc(null)} />
+      )}
+      {preview && (
+        <Viewer
+          key={preview.id}
+          doc={docs.find((d) => d.id === preview.id) || preview}
+          onClose={() => setPreview(null)}
+          onDownload={download}
+          onShare={(doc) => setShareDoc(doc)}
+          onOpen={open}
+          onRetry={retry}
+        />
+      )}
+      {deleteDoc && (
+        <Dialog title="Delete this file?" onClose={() => setDeleteDoc(null)}>
+          <p>
+            “{deleteDoc.filename}” and its searchable passages will be
+            permanently removed. People you shared it with will lose access.
+          </p>
+          <div className="dialog-actions">
+            <button className="secondary" onClick={() => setDeleteDoc(null)}>
+              Keep file
+            </button>
+            <button className="danger" disabled={busy} onClick={remove}>
+              {busy ? "Deleting…" : "Delete file"}
+            </button>
+          </div>
+        </Dialog>
+      )}
+    </div>
+  );
 }
 function ShareDialog({ doc, onClose }) {
- const [shares, setShares] = useState([]), [email, setEmail] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
- const load = useCallback(() => api.getDocumentShares(doc.id).then(r => setShares(r.shares)).catch(e => setError(e.message)), [doc.id]);
- useEffect(() => { load(); }, [load]);
- async function share(e) { e.preventDefault(); setBusy(true); setError(''); try { await api.shareDocument(doc.id, { email }); setEmail(''); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); } }
- async function revoke(id) { setBusy(true); try { await api.revokeShare(doc.id, id); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); } }
- return <Dialog title="Better together" onClose={onClose}><p className="muted">Share <strong>{doc.filename}</strong></p><form onSubmit={share} className="share-form"><label htmlFor="share-email">Invite by email</label><div><input id="share-email" type="email" placeholder="collaborator@example.com" required value={email} onChange={e => setEmail(e.target.value)}/><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Share'}</button></div><small className="muted">They’ll need a CloudVault account. Viewers can read, download, and ask questions.</small></form>{error && <p className="error" role="alert">{error}</p>}<h3 className="share-subheading">People with access</h3><div className="share-person"><span className="avatar">Y</span><div>You<small>File owner</small></div><span className="muted">Owner</span></div>{shares.map(s => <div className="share-person" key={s.id}><span className="avatar">{s.shared_with_email[0].toUpperCase()}</span><div>{s.shared_with_email}<small>Can view and ask</small></div><button className="icon-button" disabled={busy} aria-label={`Remove access for ${s.shared_with_email}`} onClick={() => revoke(s.id)}><X size={17}/></button></div>)}<div className="upload-note"><ShieldCheck size={18}/><span>Restricted access. Only people you invite can open this file.</span></div></Dialog>;
+  const [shares, setShares] = useState([]),
+    [email, setEmail] = useState(""),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const load = useCallback(
+    () =>
+      api
+        .getDocumentShares(doc.id)
+        .then((r) => setShares(r.shares))
+        .catch((e) => setError(e.message)),
+    [doc.id],
+  );
+  useEffect(() => {
+    load();
+  }, [load]);
+  async function share(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.shareDocument(doc.id, { email });
+      setEmail("");
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function revoke(id) {
+    setBusy(true);
+    try {
+      await api.revokeShare(doc.id, id);
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog title="Better together" onClose={onClose}>
+      <p className="muted">
+        Share <strong>{doc.filename}</strong>
+      </p>
+      <form onSubmit={share} className="share-form">
+        <label htmlFor="share-email">Invite by email</label>
+        <div>
+          <input
+            id="share-email"
+            type="email"
+            placeholder="collaborator@example.com"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <button className="primary" disabled={busy}>
+            {busy ? "Saving…" : "Share"}
+          </button>
+        </div>
+        <small className="muted">
+          They’ll need a CloudVault account. Viewers can read, download, and ask
+          questions.
+        </small>
+      </form>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <h3 className="share-subheading">People with access</h3>
+      <div className="share-person">
+        <span className="avatar">Y</span>
+        <div>
+          You<small>File owner</small>
+        </div>
+        <span className="muted">Owner</span>
+      </div>
+      {shares.map((s) => (
+        <div className="share-person" key={s.id}>
+          <span className="avatar">{s.shared_with_email[0].toUpperCase()}</span>
+          <div>
+            {s.shared_with_email}
+            <small>Can view and ask</small>
+          </div>
+          <button
+            className="icon-button"
+            disabled={busy}
+            aria-label={`Remove access for ${s.shared_with_email}`}
+            onClick={() => revoke(s.id)}
+          >
+            <X size={17} />
+          </button>
+        </div>
+      ))}
+      <div className="upload-note">
+        <ShieldCheck size={18} />
+        <span>
+          Restricted access. Only people you invite can open this file.
+        </span>
+      </div>
+    </Dialog>
+  );
 }
 function Viewer({ doc, onClose, onDownload, onShare, onOpen, onRetry }) {
- const filename = doc.filename;
- const [text, setText] = useState(''), [url, setUrl] = useState(''), [error, setError] = useState(''), [loading, setLoading] = useState(true), [chat, setChat] = useState(true);
- useEffect(() => { let active = true, objectUrl; setLoading(true); setError(''); setText(''); setUrl('');
-  (filename.toLowerCase().endsWith('.pdf') ? api.getDocumentBlob(doc.id).then(b => { objectUrl = URL.createObjectURL(b); if (active) setUrl(objectUrl); }) : api.getDocumentText(doc.id).then(r => { if (active) setText(r.text); })).catch(e => { if (active) setError(e.message); }).finally(() => { if (active) setLoading(false); });
-  return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
- }, [doc.id, filename]);
- return <Dialog title={doc.filename} onClose={onClose} className="viewer-dialog"><div className="viewer-toolbar"><div><span className={`file-icon ${kind(doc).toLowerCase()}`}><FileText size={17}/></span><span>{kind(doc)}<span className="separator">·</span>{size(doc.file_size)}</span><span className="viewer-status">{doc.status === 'ready' ? 'Ready to explore' : doc.status === 'failed' ? 'Indexing failed' : 'Preparing document…'}</span>{doc.status === 'failed' && doc.is_owner && <button className="text-button" onClick={() => onRetry(doc)}>Retry indexing</button>}</div><div><button className="icon-button" aria-label="Download file" onClick={() => onDownload(doc)}><Download size={18}/></button>{doc.is_owner && <button className="icon-button" aria-label="Share file" onClick={() => onShare(doc)}><Share2 size={18}/></button>}<button className="icon-button" aria-label={chat ? 'Hide document chat' : 'Show document chat'} onClick={() => setChat(!chat)}>{chat ? <PanelRightClose size={19}/> : <PanelRightOpen size={19}/>}</button></div></div><div className={`viewer-body ${chat ? '' : 'no-chat'}`}><section className="document-canvas" aria-label="Document preview">{loading ? <div className="empty-state" role="status"><LoaderCircle className="spin"/>Opening document…</div> : error ? <p className="error" role="alert">{error}</p> : url ? <iframe title={doc.filename} src={url}/> : <article className="document-paper"><span className="eyebrow">DOCUMENT · {kind(doc)}</span><h2>{doc.filename.replace(/\.[^.]+$/, '')}</h2><pre>{text || 'This document has no readable text.'}</pre></article>}</section>{chat && <Chat key={doc.id} document={doc} readyCount={doc.status === 'ready' ? 1 : 0} compact onOpen={onOpen}/>}</div></Dialog>;
+  const filename = doc.filename;
+  const [text, setText] = useState(""),
+    [url, setUrl] = useState(""),
+    [error, setError] = useState(""),
+    [loading, setLoading] = useState(true),
+    [chat, setChat] = useState(true);
+  useEffect(() => {
+    let active = true,
+      objectUrl;
+    (filename.toLowerCase().endsWith(".pdf")
+      ? api.getDocumentBlob(doc.id).then((b) => {
+          objectUrl = URL.createObjectURL(b);
+          if (active) setUrl(objectUrl);
+        })
+      : api.getDocumentText(doc.id).then((r) => {
+          if (active) setText(r.text);
+        })
+    )
+      .catch((e) => {
+        if (active) setError(e.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [doc.id, filename]);
+  return (
+    <Dialog title={doc.filename} onClose={onClose} className="viewer-dialog">
+      <div className="viewer-toolbar">
+        <div>
+          <span className={`file-icon ${kind(doc).toLowerCase()}`}>
+            <FileText size={17} />
+          </span>
+          <span>
+            {kind(doc)}
+            <span className="separator">·</span>
+            {size(doc.file_size)}
+          </span>
+          <span className="viewer-status">
+            {doc.status === "ready"
+              ? "Ready to explore"
+              : doc.status === "failed"
+                ? "Indexing failed"
+                : "Preparing document…"}
+          </span>
+          {doc.status === "failed" && doc.is_owner && (
+            <button className="text-button" onClick={() => onRetry(doc)}>
+              Retry indexing
+            </button>
+          )}
+        </div>
+        <div>
+          <button
+            className="icon-button"
+            aria-label="Download file"
+            onClick={() => onDownload(doc)}
+          >
+            <Download size={18} />
+          </button>
+          {doc.is_owner && (
+            <button
+              className="icon-button"
+              aria-label="Share file"
+              onClick={() => onShare(doc)}
+            >
+              <Share2 size={18} />
+            </button>
+          )}
+          <button
+            className="icon-button"
+            aria-label={chat ? "Hide document chat" : "Show document chat"}
+            onClick={() => setChat(!chat)}
+          >
+            {chat ? (
+              <PanelRightClose size={19} />
+            ) : (
+              <PanelRightOpen size={19} />
+            )}
+          </button>
+        </div>
+      </div>
+      <div className={`viewer-body ${chat ? "" : "no-chat"}`}>
+        <section className="document-canvas" aria-label="Document preview">
+          {loading ? (
+            <div className="empty-state" role="status">
+              <LoaderCircle className="spin" />
+              Opening document…
+            </div>
+          ) : error ? (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          ) : url ? (
+            <iframe title={doc.filename} src={url} />
+          ) : (
+            <article className="document-paper">
+              <span className="eyebrow">DOCUMENT · {kind(doc)}</span>
+              <h2>{doc.filename.replace(/\.[^.]+$/, "")}</h2>
+              {kind(doc) === "MD" ? (
+                <div className="markdown">
+                  <ReactMarkdown>
+                    {text || "This document has no readable text."}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <pre>{text || "This document has no readable text."}</pre>
+              )}
+            </article>
+          )}
+        </section>
+        {chat && (
+          <Chat
+            key={doc.id}
+            document={doc}
+            readyCount={doc.status === "ready" ? 1 : 0}
+            compact
+            onOpen={onOpen}
+          />
+        )}
+      </div>
+    </Dialog>
+  );
 }

@@ -38,7 +38,7 @@ resource('DatabaseSubnets','RDS::DBSubnetGroup',DBSubnetGroupDescription='Privat
 resource('Database','RDS::DBInstance',Engine='postgres',DBInstanceClass=R('DatabaseClass'),DBName='cloudvault',MasterUsername='cloudvault',ManageMasterUserPassword=True,AllocatedStorage='20',MaxAllocatedStorage=100,StorageType='gp3',StorageEncrypted=True,MultiAZ=R('DatabaseMultiAZ'),BackupRetentionPeriod=7,PubliclyAccessible=False,DBSubnetGroupName=R('DatabaseSubnets'),VPCSecurityGroups=[R('DatabaseSG')],DeletionProtection=True,CopyTagsToSnapshot=True,AutoMinorVersionUpgrade=True)
 resources['Database'].update(DeletionPolicy='Snapshot',UpdateReplacePolicy='Snapshot')
 resource('AppSecret','SecretsManager::Secret',Description='Shared JWT signing key for all CloudVault replicas',GenerateSecretString={'SecretStringTemplate':'{}','GenerateStringKey':'jwtSecret','PasswordLength':64,'ExcludePunctuation':True})
-resource('Documents','S3::Bucket',BucketEncryption={'ServerSideEncryptionConfiguration':[{'ServerSideEncryptionByDefault':{'SSEAlgorithm':'AES256'}}]},PublicAccessBlockConfiguration={'BlockPublicAcls':True,'BlockPublicPolicy':True,'IgnorePublicAcls':True,'RestrictPublicBuckets':True},VersioningConfiguration={'Status':'Enabled'},CorsConfiguration={'CorsRules':[{'AllowedOrigins':[S('https://${AppDomain}')],'AllowedMethods':['PUT'],'AllowedHeaders':['content-type'],'MaxAge':900}]},LifecycleConfiguration={'Rules':[{'Id':'AbortIncompleteUploads','Status':'Enabled','AbortIncompleteMultipartUpload':{'DaysAfterInitiation':1}}]})
+resource('Documents','S3::Bucket',BucketEncryption={'ServerSideEncryptionConfiguration':[{'ServerSideEncryptionByDefault':{'SSEAlgorithm':'AES256'}}]},PublicAccessBlockConfiguration={'BlockPublicAcls':True,'BlockPublicPolicy':True,'IgnorePublicAcls':True,'RestrictPublicBuckets':True},VersioningConfiguration={'Status':'Enabled'},CorsConfiguration={'CorsRules':[{'AllowedOrigins':[S('https://${AppDomain}')],'AllowedMethods':['PUT'],'AllowedHeaders':['content-type','if-none-match'],'MaxAge':900}]},LifecycleConfiguration={'Rules':[{'Id':'AbortIncompleteUploads','Status':'Enabled','AbortIncompleteMultipartUpload':{'DaysAfterInitiation':1}}]})
 resources['Documents'].update(DeletionPolicy='Retain',UpdateReplacePolicy='Retain')
 resource('DocumentsPolicy','S3::BucketPolicy',Bucket=R('Documents'),PolicyDocument={'Version':'2012-10-17','Statement':[{'Effect':'Deny','Principal':'*','Action':'s3:*','Resource':[A('Documents'),S('${Documents.Arn}/*')],'Condition':{'Bool':{'aws:SecureTransport':'false'}}}]})
 resource('DeadLetterQueue','SQS::Queue',FifoQueue=True,MessageRetentionPeriod=1209600,SqsManagedSseEnabled=True)
@@ -53,11 +53,11 @@ role('ApiRole','ec2.amazonaws.com',[
     policy(['s3:GetObject'],S('arn:${AWS::Partition}:s3:::${ArtifactBucket}/${AppArtifactKey}')),
     policy(['sqs:SendMessage'],A('IngestionQueue')),
     policy(['bedrock:InvokeModel'],modelResources),
-    policy(['logs:CreateLogStream','logs:PutLogEvents','logs:DescribeLogStreams'],S('${ApiLogs.Arn}:*')),
+    policy(['logs:CreateLogStream','logs:PutLogEvents','logs:DescribeLogStreams'],A('ApiLogs')),
 ], [S('arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore')])
 resource('ApiProfile','IAM::InstanceProfile',Roles=[R('ApiRole')])
 role('WorkerRole','lambda.amazonaws.com',[
-    secretAccess,
+    policy(['secretsmanager:GetSecretValue'], A('Database','MasterUserSecret.SecretArn')),
     policy(['s3:GetObject'],S('${Documents.Arn}/uploads/*')),
     policy(['sqs:ReceiveMessage','sqs:DeleteMessage','sqs:GetQueueAttributes'],A('IngestionQueue')),
     policy(['bedrock:InvokeModel'],S('arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0')),
@@ -65,7 +65,7 @@ role('WorkerRole','lambda.amazonaws.com',[
 resource('WorkerLogs','Logs::LogGroup',LogGroupName=S('/aws/lambda/${AWS::StackName}-ingest'),RetentionInDays=14)
 resource('ApiLogs','Logs::LogGroup',RetentionInDays=14)
 commonEnv={'NODE_ENV':'production','DB_HOST':A('Database','Endpoint.Address'),'DB_NAME':'cloudvault','DB_SSL':'true','DB_SECRET_ARN':A('Database','MasterUserSecret.SecretArn'),'APP_SECRET_ARN':R('AppSecret'),'STORAGE_MODE':'s3','S3_BUCKET_NAME':R('Documents'),'AI_ENGINE':'bedrock','BEDROCK_CHAT_MODEL':R('BedrockChatModel'),'SQS_QUEUE_URL':R('IngestionQueue'),'CORS_ORIGIN':S('https://${AppDomain}')}
-resource('Worker','Lambda::Function',FunctionName=S('${AWS::StackName}-ingest'),Runtime='nodejs22.x',Handler='src/worker.handler',Role=A('WorkerRole'),Timeout=300,MemorySize=1024,ReservedConcurrentExecutions=5,Code={'S3Bucket':R('ArtifactBucket'),'S3Key':R('WorkerArtifactKey')},VpcConfig={'SubnetIds':[R('PrivateSubnet0'),R('PrivateSubnet1')],'SecurityGroupIds':[R('WorkerSG')]},Environment={'Variables':commonEnv})
+resource('Worker','Lambda::Function',FunctionName=S('${AWS::StackName}-ingest'),Runtime='nodejs22.x',Handler='src/worker.handler',Role=A('WorkerRole'),Timeout=300,MemorySize=1024,ReservedConcurrentExecutions=5,Code={'S3Bucket':R('ArtifactBucket'),'S3Key':R('WorkerArtifactKey')},VpcConfig={'SubnetIds':[R('PrivateSubnet0'),R('PrivateSubnet1')],'SecurityGroupIds':[R('WorkerSG')]},Environment={'Variables':{**{k:v for k,v in commonEnv.items() if k != 'APP_SECRET_ARN'}, 'RUNTIME_ROLE':'worker'}})
 resources['Worker']['DependsOn']='WorkerLogs'
 resource('QueueConsumer','Lambda::EventSourceMapping',EventSourceArn=A('IngestionQueue'),FunctionName=R('Worker'),BatchSize=1,FunctionResponseTypes=['ReportBatchItemFailures'],Enabled=True)
 resource('LoadBalancer','ElasticLoadBalancingV2::LoadBalancer',Scheme='internet-facing',Subnets=[R('PublicSubnet0'),R('PublicSubnet1')],SecurityGroups=[R('LoadBalancerSG')],LoadBalancerAttributes=[{'Key':'idle_timeout.timeout_seconds','Value':'120'}])

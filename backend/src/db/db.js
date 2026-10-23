@@ -1,8 +1,8 @@
-import pg from 'pg';
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
-import { config } from '../config/env.js';
+import pg from "pg";
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+import { config } from "../config/env.js";
 
 const { Pool } = pg;
 
@@ -34,38 +34,49 @@ class PostgresAdapter {
       password: config.db.password,
       ssl: config.db.ssl,
       max: 10,
-      idleTimeoutMillis: 30000
+      idleTimeoutMillis: 30000,
     });
   }
 
   async init() {
-    console.log(`[DB] Connecting to PostgreSQL at ${config.db.host}:${config.db.port}...`);
+    console.log(
+      `[DB] Connecting to PostgreSQL at ${config.db.host}:${config.db.port}...`,
+    );
     const client = await this.pool.connect();
     try {
       // Serialize schema setup across API replicas and Lambda cold starts.
-      await client.query('SELECT pg_advisory_lock(842139)');
+      await client.query("SELECT pg_advisory_lock(842139)");
       // Enable pgvector and uuid
       await client.query(`CREATE EXTENSION IF NOT EXISTS "vector";`);
       await client.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
 
       // Run 001_init.sql
-      const sqlPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), 'migrations/001_init.sql');
+      const sqlPath = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        "migrations/001_init.sql",
+      );
       if (fs.existsSync(sqlPath)) {
-        const sql = fs.readFileSync(sqlPath, 'utf8');
+        const sql = fs.readFileSync(sqlPath, "utf8");
         await client.query(sql);
       }
-      console.log('[DB] PostgreSQL + pgvector connected and initialized successfully.');
+      console.log(
+        "[DB] PostgreSQL + pgvector connected and initialized successfully.",
+      );
     } finally {
-      await client.query('SELECT pg_advisory_unlock(842139)');
+      await client.query("SELECT pg_advisory_unlock(842139)");
       client.release();
     }
+  }
+
+  async healthcheck() {
+    await this.pool.query("SELECT 1");
   }
 
   // User queries
   async createUser({ email, passwordHash }) {
     const res = await this.pool.query(
       `INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email, created_at`,
-      [email.toLowerCase(), passwordHash]
+      [email.toLowerCase(), passwordHash],
     );
     return res.rows[0];
   }
@@ -73,7 +84,7 @@ class PostgresAdapter {
   async findUserByEmail(email) {
     const res = await this.pool.query(
       `SELECT * FROM users WHERE LOWER(email) = LOWER($1)`,
-      [email]
+      [email],
     );
     return res.rows[0] || null;
   }
@@ -81,13 +92,16 @@ class PostgresAdapter {
   async findUserById(id) {
     const res = await this.pool.query(
       `SELECT id, email, created_at FROM users WHERE id = $1`,
-      [id]
+      [id],
     );
     return res.rows[0] || null;
   }
 
   async claimForQueue(id) {
-    const result = await this.pool.query("UPDATE documents SET status = 'queued', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status NOT IN ('queued', 'processing') RETURNING id", [id]);
+    const result = await this.pool.query(
+      "UPDATE documents SET status = 'queued', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status NOT IN ('queued', 'processing') RETURNING id",
+      [id],
+    );
     return result.rowCount > 0;
   }
 
@@ -97,20 +111,28 @@ class PostgresAdapter {
       `INSERT INTO documents (owner_id, filename, s3_key, file_size, mime_type, status)
        VALUES ($1, $2, $3, $4, $5, 'pending')
        RETURNING *`,
-      [ownerId, filename, s3Key, fileSize || 0, mimeType || 'application/octet-stream']
+      [
+        ownerId,
+        filename,
+        s3Key,
+        fileSize || 0,
+        mimeType || "application/octet-stream",
+      ],
     );
     return res.rows[0];
   }
 
   async getDocumentById(id) {
-    const res = await this.pool.query(`SELECT * FROM documents WHERE id = $1`, [id]);
+    const res = await this.pool.query(`SELECT * FROM documents WHERE id = $1`, [
+      id,
+    ]);
     return res.rows[0] || null;
   }
 
   async updateDocumentStatus(id, status, errorMessage = null) {
     const res = await this.pool.query(
       `UPDATE documents SET status = $1, error_message = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,
-      [status, errorMessage, id]
+      [status, errorMessage, id],
     );
     return res.rows[0];
   }
@@ -118,7 +140,7 @@ class PostgresAdapter {
   async updateDocumentMetadata(id, { fileSize, mimeType }) {
     const res = await this.pool.query(
       `UPDATE documents SET file_size = COALESCE($1, file_size), mime_type = COALESCE($2, mime_type), updated_at = CURRENT_TIMESTAMP WHERE id = $3 RETURNING *`,
-      [fileSize ?? null, mimeType ?? null, id]
+      [fileSize ?? null, mimeType ?? null, id],
     );
     return res.rows[0];
   }
@@ -136,7 +158,7 @@ class PostgresAdapter {
        LEFT JOIN document_shares ds ON d.id = ds.document_id AND ds.shared_with_user_id = $1
        WHERE d.owner_id = $1 OR ds.shared_with_user_id = $1
        ORDER BY d.uploaded_at DESC`,
-      [userId]
+      [userId],
     );
     return res.rows;
   }
@@ -144,20 +166,20 @@ class PostgresAdapter {
   async deleteDocument(id, ownerId) {
     const res = await this.pool.query(
       `DELETE FROM documents WHERE id = $1 AND owner_id = $2 RETURNING *`,
-      [id, ownerId]
+      [id, ownerId],
     );
     return res.rows[0] || null;
   }
 
   // Share queries
-  async shareDocument({ documentId, sharedWithUserId, permission = 'view' }) {
+  async shareDocument({ documentId, sharedWithUserId, permission = "view" }) {
     const res = await this.pool.query(
       `INSERT INTO document_shares (document_id, shared_with_user_id, permission)
        VALUES ($1, $2, $3)
        ON CONFLICT (document_id, shared_with_user_id) 
        DO UPDATE SET permission = EXCLUDED.permission
        RETURNING *`,
-      [documentId, sharedWithUserId, permission]
+      [documentId, sharedWithUserId, permission],
     );
     return res.rows[0];
   }
@@ -168,13 +190,16 @@ class PostgresAdapter {
        FROM document_shares ds
        JOIN users u ON ds.shared_with_user_id = u.id
        WHERE ds.document_id = $1`,
-      [documentId]
+      [documentId],
     );
     return res.rows;
   }
 
   async revokeShare(documentId, shareId) {
-    await this.pool.query('DELETE FROM document_shares WHERE id = $1 AND document_id = $2', [shareId, documentId]);
+    await this.pool.query(
+      "DELETE FROM document_shares WHERE id = $1 AND document_id = $2",
+      [shareId, documentId],
+    );
   }
 
   // Chunks & Vector storage
@@ -182,19 +207,19 @@ class PostgresAdapter {
     if (!chunks || chunks.length === 0) return;
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
       for (const chunk of chunks) {
         // format vector for pgvector: '[0.1, 0.2, ...]'
-        const vectorStr = `[${chunk.embedding.join(',')}]`;
+        const vectorStr = `[${chunk.embedding.join(",")}]`;
         await client.query(
           `INSERT INTO chunks (document_id, chunk_index, content, embedding)
            VALUES ($1, $2, $3, $4::vector)`,
-          [chunk.documentId, chunk.chunkIndex, chunk.content, vectorStr]
+          [chunk.documentId, chunk.chunkIndex, chunk.content, vectorStr],
         );
       }
-      await client.query('COMMIT');
+      await client.query("COMMIT");
     } catch (err) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       throw err;
     } finally {
       client.release();
@@ -202,12 +227,19 @@ class PostgresAdapter {
   }
 
   async deleteChunksForDocument(documentId) {
-    await this.pool.query(`DELETE FROM chunks WHERE document_id = $1`, [documentId]);
+    await this.pool.query(`DELETE FROM chunks WHERE document_id = $1`, [
+      documentId,
+    ]);
   }
 
   // Vector similarity search with strict Access Control (ACL)
-  async searchSimilarChunks({ queryEmbedding, userId, limit = 5, documentId = null }) {
-    const vectorStr = `[${queryEmbedding.join(',')}]`;
+  async searchSimilarChunks({
+    queryEmbedding,
+    userId,
+    limit = 5,
+    documentId = null,
+  }) {
+    const vectorStr = `[${queryEmbedding.join(",")}]`;
     const res = await this.pool.query(
       `SELECT c.id, c.document_id, c.chunk_index, c.content,
               d.filename, d.owner_id,
@@ -219,7 +251,7 @@ class PostgresAdapter {
          AND d.status = 'ready' AND ($4::uuid IS NULL OR d.id = $4::uuid)
        ORDER BY c.embedding <=> $1::vector ASC
        LIMIT $3`,
-      [vectorStr, userId, limit, documentId]
+      [vectorStr, userId, limit, documentId],
     );
     return res.rows;
   }
@@ -230,12 +262,15 @@ class PostgresAdapter {
 // -------------------------------------------------------------
 class LocalEmbeddedAdapter {
   constructor() {
-    this.dataFile = path.resolve(config.paths.dataDir, 'cloudvault_local_db.json');
+    this.dataFile = path.resolve(
+      config.paths.dataDir,
+      "cloudvault_local_db.json",
+    );
     this.data = {
       users: [],
       documents: [],
       document_shares: [],
-      chunks: []
+      chunks: [],
     };
   }
 
@@ -245,36 +280,48 @@ class LocalEmbeddedAdapter {
     }
     if (fs.existsSync(this.dataFile)) {
       try {
-        const raw = fs.readFileSync(this.dataFile, 'utf8');
+        const raw = fs.readFileSync(this.dataFile, "utf8");
         this.data = JSON.parse(raw);
-        console.log(`[DB] Local embedded database loaded from ${this.dataFile}`);
+        console.log(
+          `[DB] Local embedded database loaded from ${this.dataFile}`,
+        );
       } catch (err) {
-        console.warn('[DB] Failed to read local db file, initializing fresh store.');
+        console.warn(
+          "[DB] Failed to read local db file, initializing fresh store.",
+        );
         this._save();
       }
     } else {
       this._save();
-      console.log(`[DB] Created fresh local embedded database at ${this.dataFile}`);
+      console.log(
+        `[DB] Created fresh local embedded database at ${this.dataFile}`,
+      );
     }
   }
 
   _save() {
-    fs.writeFileSync(this.dataFile, JSON.stringify(this.data, null, 2), 'utf8');
+    fs.writeFileSync(this.dataFile, JSON.stringify(this.data, null, 2), "utf8");
+  }
+
+  async healthcheck() {
+    return true;
   }
 
   // User queries
   async createUser({ email, passwordHash }) {
-    const existing = this.data.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    const existing = this.data.users.find(
+      (u) => u.email.toLowerCase() === email.toLowerCase(),
+    );
     if (existing) {
-      const err = new Error('User already exists');
-      err.code = '23505'; // PostgreSQL unique violation code
+      const err = new Error("User already exists");
+      err.code = "23505"; // PostgreSQL unique violation code
       throw err;
     }
     const user = {
       id: crypto.randomUUID(),
       email: email.toLowerCase(),
       password_hash: passwordHash,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
     };
     this.data.users.push(user);
     this._save();
@@ -282,21 +329,26 @@ class LocalEmbeddedAdapter {
   }
 
   async findUserByEmail(email) {
-    const user = this.data.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    const user = this.data.users.find(
+      (u) => u.email.toLowerCase() === email.toLowerCase(),
+    );
     return user || null;
   }
 
   async findUserById(id) {
-    const user = this.data.users.find(u => u.id === id);
+    const user = this.data.users.find((u) => u.id === id);
     if (!user) return null;
     return { id: user.id, email: user.email, created_at: user.created_at };
   }
 
   async claimForQueue(id) {
-    const doc = this.data.documents.find(d => d.id === id);
-    if (!doc || ['queued', 'processing'].includes(doc.status)) return false;
-    doc.status = 'queued'; doc.error_message = null; doc.updated_at = new Date().toISOString();
-    this._save(); return true;
+    const doc = this.data.documents.find((d) => d.id === id);
+    if (!doc || ["queued", "processing"].includes(doc.status)) return false;
+    doc.status = "queued";
+    doc.error_message = null;
+    doc.updated_at = new Date().toISOString();
+    this._save();
+    return true;
   }
 
   // Document queries
@@ -307,11 +359,11 @@ class LocalEmbeddedAdapter {
       filename,
       s3_key: s3Key,
       file_size: fileSize || 0,
-      mime_type: mimeType || 'application/octet-stream',
-      status: 'pending',
+      mime_type: mimeType || "application/octet-stream",
+      status: "pending",
       error_message: null,
       uploaded_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     };
     this.data.documents.push(doc);
     this._save();
@@ -319,11 +371,11 @@ class LocalEmbeddedAdapter {
   }
 
   async getDocumentById(id) {
-    return this.data.documents.find(d => d.id === id) || null;
+    return this.data.documents.find((d) => d.id === id) || null;
   }
 
   async updateDocumentStatus(id, status, errorMessage = null) {
-    const doc = this.data.documents.find(d => d.id === id);
+    const doc = this.data.documents.find((d) => d.id === id);
     if (doc) {
       doc.status = status;
       doc.error_message = errorMessage;
@@ -334,7 +386,7 @@ class LocalEmbeddedAdapter {
   }
 
   async updateDocumentMetadata(id, { fileSize, mimeType }) {
-    const doc = this.data.documents.find(d => d.id === id);
+    const doc = this.data.documents.find((d) => d.id === id);
     if (doc) {
       if (fileSize !== undefined) doc.file_size = fileSize;
       if (mimeType !== undefined) doc.mime_type = mimeType;
@@ -345,41 +397,51 @@ class LocalEmbeddedAdapter {
   }
 
   async listDocumentsForUser(userId) {
-    const userShares = this.data.document_shares.filter(s => s.shared_with_user_id === userId);
-    const sharedDocIds = new Set(userShares.map(s => s.document_id));
+    const userShares = this.data.document_shares.filter(
+      (s) => s.shared_with_user_id === userId,
+    );
+    const sharedDocIds = new Set(userShares.map((s) => s.document_id));
 
     return this.data.documents
-      .filter(d => d.owner_id === userId || sharedDocIds.has(d.id))
-      .map(d => {
-        const owner = this.data.users.find(u => u.id === d.owner_id);
-        const share = userShares.find(s => s.document_id === d.id);
-        const chunkCount = this.data.chunks.filter(c => c.document_id === d.id).length;
+      .filter((d) => d.owner_id === userId || sharedDocIds.has(d.id))
+      .map((d) => {
+        const owner = this.data.users.find((u) => u.id === d.owner_id);
+        const share = userShares.find((s) => s.document_id === d.id);
+        const chunkCount = this.data.chunks.filter(
+          (c) => c.document_id === d.id,
+        ).length;
         return {
           ...d,
           is_owner: d.owner_id === userId,
           share_permission: share ? share.permission : null,
-          owner_email: owner ? owner.email : 'unknown',
-          chunk_count: chunkCount
+          owner_email: owner ? owner.email : "unknown",
+          chunk_count: chunkCount,
         };
       })
       .sort((a, b) => new Date(b.uploaded_at) - new Date(a.uploaded_at));
   }
 
   async deleteDocument(id, ownerId) {
-    const index = this.data.documents.findIndex(d => d.id === id && d.owner_id === ownerId);
+    const index = this.data.documents.findIndex(
+      (d) => d.id === id && d.owner_id === ownerId,
+    );
     if (index === -1) return null;
     const [deleted] = this.data.documents.splice(index, 1);
     // Cascade delete shares and chunks
-    this.data.document_shares = this.data.document_shares.filter(s => s.document_id !== id);
-    this.data.chunks = this.data.chunks.filter(c => c.document_id !== id);
+    this.data.document_shares = this.data.document_shares.filter(
+      (s) => s.document_id !== id,
+    );
+    this.data.chunks = this.data.chunks.filter((c) => c.document_id !== id);
     this._save();
     return deleted;
   }
 
   // Share queries
-  async shareDocument({ documentId, sharedWithUserId, permission = 'view' }) {
+  async shareDocument({ documentId, sharedWithUserId, permission = "view" }) {
     let share = this.data.document_shares.find(
-      s => s.document_id === documentId && s.shared_with_user_id === sharedWithUserId
+      (s) =>
+        s.document_id === documentId &&
+        s.shared_with_user_id === sharedWithUserId,
     );
     if (share) {
       share.permission = permission;
@@ -389,7 +451,7 @@ class LocalEmbeddedAdapter {
         document_id: documentId,
         shared_with_user_id: sharedWithUserId,
         permission,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
       };
       this.data.document_shares.push(share);
     }
@@ -399,18 +461,22 @@ class LocalEmbeddedAdapter {
 
   async getDocumentShares(documentId) {
     return this.data.document_shares
-      .filter(s => s.document_id === documentId)
-      .map(s => {
-        const user = this.data.users.find(u => u.id === s.shared_with_user_id);
+      .filter((s) => s.document_id === documentId)
+      .map((s) => {
+        const user = this.data.users.find(
+          (u) => u.id === s.shared_with_user_id,
+        );
         return {
           ...s,
-          shared_with_email: user ? user.email : 'unknown'
+          shared_with_email: user ? user.email : "unknown",
         };
       });
   }
 
   async revokeShare(documentId, shareId) {
-    this.data.document_shares = this.data.document_shares.filter(s => !(s.id === shareId && s.document_id === documentId));
+    this.data.document_shares = this.data.document_shares.filter(
+      (s) => !(s.id === shareId && s.document_id === documentId),
+    );
     this._save();
   }
 
@@ -424,41 +490,56 @@ class LocalEmbeddedAdapter {
         chunk_index: chunk.chunkIndex,
         content: chunk.content,
         embedding: chunk.embedding,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
       });
     }
     this._save();
   }
 
   async deleteChunksForDocument(documentId) {
-    this.data.chunks = this.data.chunks.filter(c => c.document_id !== documentId);
+    this.data.chunks = this.data.chunks.filter(
+      (c) => c.document_id !== documentId,
+    );
     this._save();
   }
 
   // Vector similarity search with strict Access Control (ACL)
-  async searchSimilarChunks({ queryEmbedding, userId, limit = 5, documentId = null }) {
+  async searchSimilarChunks({
+    queryEmbedding,
+    userId,
+    limit = 5,
+    documentId = null,
+  }) {
     // 1. Identify accessible document IDs
-    const userShares = this.data.document_shares.filter(s => s.shared_with_user_id === userId);
+    const userShares = this.data.document_shares.filter(
+      (s) => s.shared_with_user_id === userId,
+    );
     const accessibleDocIds = new Set(
       this.data.documents
-        .filter(d => (d.owner_id === userId || userShares.some(s => s.document_id === d.id)) && d.status === 'ready' && (!documentId || d.id === documentId))
-        .map(d => d.id)
+        .filter(
+          (d) =>
+            (d.owner_id === userId ||
+              userShares.some((s) => s.document_id === d.id)) &&
+            d.status === "ready" &&
+            (!documentId || d.id === documentId),
+        )
+        .map((d) => d.id),
     );
 
     // 2. Score chunks belonging to accessible documents
     const scoredChunks = [];
     for (const chunk of this.data.chunks) {
       if (accessibleDocIds.has(chunk.document_id)) {
-        const doc = this.data.documents.find(d => d.id === chunk.document_id);
+        const doc = this.data.documents.find((d) => d.id === chunk.document_id);
         const similarity = cosineSimilarity(queryEmbedding, chunk.embedding);
         scoredChunks.push({
           id: chunk.id,
           document_id: chunk.document_id,
           chunk_index: chunk.chunk_index,
           content: chunk.content,
-          filename: doc ? doc.filename : 'document',
+          filename: doc ? doc.filename : "document",
           owner_id: doc ? doc.owner_id : null,
-          similarity: parseFloat(similarity.toFixed(5))
+          similarity: parseFloat(similarity.toFixed(5)),
         });
       }
     }
@@ -475,10 +556,12 @@ class LocalEmbeddedAdapter {
 let dbInstance;
 
 if (config.db.host) {
-  console.log('[DB] Configured for PostgreSQL (RDS / Local)');
+  console.log("[DB] Configured for PostgreSQL (RDS / Local)");
   dbInstance = new PostgresAdapter();
 } else {
-  console.log('[DB] No PostgreSQL host provided; activating local embedded DB engine');
+  console.log(
+    "[DB] No PostgreSQL host provided; activating local embedded DB engine",
+  );
   dbInstance = new LocalEmbeddedAdapter();
 }
 
