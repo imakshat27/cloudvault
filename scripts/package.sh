@@ -12,6 +12,6 @@ cp -R backend/src backend/package.json backend/package-lock.json backend/node_mo
 cp -R frontend/dist build/app/frontend/
 cp -R backend/src backend/package.json backend/package-lock.json backend/node_modules build/worker/
 cp build/app/backend/certs/rds.pem build/worker/certs/rds.pem
-tar -czf build/app.tar.gz -C build/app .
+COPYFILE_DISABLE=1 tar --no-xattrs -czf build/app.tar.gz -C build/app .
 (cd build/worker && zip -qr ../worker.zip .)
 printf 'Artifacts ready: build/app.tar.gz and build/worker.zip\n'

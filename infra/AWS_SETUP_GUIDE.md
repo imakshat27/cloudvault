@@ -112,6 +112,8 @@ Share this code only with the reviewers who should be able to create an account.
 7. Stop one EC2 instance through a controlled exercise. Check ALB health routing and ASG replacement. Run a separate RDS failover exercise if your class budget permits it.
 8. Test a malformed document, inspect retries and the DLQ, repair the cause, then redrive the message. A ready document makes duplicate delivery a no-op. A timeout can leave the displayed status as processing until a retry/redrive completes.
 
+For a repeatable HTTPS check against your own review environment, set `CLOUDVAULT_URL` and `CV_INVITE_CODE` privately and run `node scripts/cloud-smoke.mjs`. It generates two synthetic accounts, checks S3/SQS/Lambda/vector retrieval/Bedrock/sharing, and deletes its disposable document. Test passwords and tokens are never printed or persisted; the two synthetic accounts remain.
+
 Do not report these exercises as passed before running them in your account.
 
 ## Monitoring and operations
