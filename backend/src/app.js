@@ -31,8 +31,12 @@ app.use(
         "font-src": ["'self'", "https://fonts.gstatic.com"],
         "connect-src": [
           "'self'",
-          "https://*.s3.amazonaws.com",
-          "https://*.s3.*.amazonaws.com",
+          ...(config.aws.storageMode === "s3"
+            ? [
+                `https://${config.aws.bucketName}.s3.${config.aws.region}.amazonaws.com`,
+                `https://${config.aws.bucketName}.s3.amazonaws.com`,
+              ]
+            : []),
         ],
         "frame-src": ["'self'", "blob:"],
         "img-src": ["'self'", "blob:", "data:"],
