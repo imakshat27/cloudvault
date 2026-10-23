@@ -20,6 +20,6 @@ Run `scripts/cloud-smoke.mjs` against your own review host with the URL and invi
 
 The cost-conscious review profile starts one EC2 API instance, permits scaling to two, uses one NAT gateway and single-AZ RDS, and retains one day of automated DB backups. The Free account plan rejected seven-day retention; the review profile uses the supported setting without a paid-plan upgrade.
 
-The availability demonstration profile provides two initial API instances, two NAT gateways and Multi-AZ RDS. Controlled EC2 replacement, database failover and DLQ redrive exercises have not yet been performed in the review account; the successful smoke check does not establish those recovery guarantees.
+The availability demonstration profile provides two initial API instances, two NAT gateways and Multi-AZ RDS. Deliberate EC2 failure, database failover and DLQ redrive exercises have not yet been performed in the review account; the successful smoke check does not establish those recovery guarantees.
 
 Account identifiers, actual hostnames, invitation codes, signing keys and deployment parameters are deliberately omitted from this repository.
