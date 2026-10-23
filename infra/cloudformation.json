@@ -1062,7 +1062,6 @@
         },
         "Timeout": 300,
         "MemorySize": 1024,
-        "ReservedConcurrentExecutions": 5,
         "Code": {
           "S3Bucket": {
             "Ref": "ArtifactBucket"
@@ -1141,6 +1140,9 @@
         "FunctionResponseTypes": [
           "ReportBatchItemFailures"
         ],
+        "ScalingConfig": {
+          "MaximumConcurrency": 2
+        },
         "Enabled": true
       }
     },
@@ -1244,6 +1246,9 @@
           },
           "InstanceType": {
             "Ref": "InstanceType"
+          },
+          "CreditSpecification": {
+            "CpuCredits": "standard"
           },
           "IamInstanceProfile": {
             "Arn": {

@@ -18,6 +18,7 @@ const appUser = {
 await master.connect();
 try {
   await provisionDatabase(master, appUser);
+  await provisionDatabase(master, appUser);
   const app = new pg.Client({
     ...connection,
     user: appUser.username,

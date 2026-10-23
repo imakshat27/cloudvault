@@ -86,7 +86,7 @@ Production uses a shared randomly generated JWT secret, hashed passwords, TLS, r
 
 API replicas run across two availability zones. ALB health probes include a database readiness query. Auto Scaling targets 60% CPU and replaces unhealthy instances. Shared metadata, objects, and signing configuration let any API instance serve a request.
 
-RDS Multi-AZ provides a managed standby when enabled. Each AZ has outbound routing through its own NAT gateway. Lambda has reserved concurrency of five to avoid unbounded indexing load on a small database. FIFO grouping serializes work for the same document while allowing different files to process concurrently. Queue visibility is six times the function timeout; the worker returns partial-batch failures.
+RDS Multi-AZ provides a managed standby when enabled. Each AZ has outbound routing through its own NAT gateway. The SQS event mapping limits indexing to two concurrent Lambda invocations. No reserved concurrency is required, which accommodates new accounts with a total concurrency quota of ten. FIFO grouping serializes work for the same document while allowing different files to process concurrently. Queue visibility is six times the function timeout; the worker returns partial-batch failures.
 
 Operations still require exercises: API replacement, RDS failover, model access failure, malformed input, DLQ redrive, and load testing. A linter or local test does not establish a deployed availability guarantee.
 

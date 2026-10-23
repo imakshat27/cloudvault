@@ -24,12 +24,14 @@ export async function provisionDatabase(client, appUser) {
       ),
     );
     const exists = await client.query(
-      "SELECT 1 FROM pg_roles WHERE rolname = $1",
+      "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname = $1",
       [appUser.username],
     );
+    if (exists.rows.some((row) => Object.values(row).some(Boolean)))
+      throw new Error("Application role has unexpected privileged attributes");
     const role = quoteIdentifier(appUser.username);
     await client.query(
-      `${exists.rowCount ? "ALTER" : "CREATE"} ROLE ${role} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD ${quoteLiteral(appUser.password)}`,
+      `${exists.rowCount ? "ALTER" : "CREATE"} ROLE ${role} LOGIN PASSWORD ${quoteLiteral(appUser.password)}`,
     );
     const {
       rows: [row],

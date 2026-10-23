@@ -179,7 +179,10 @@ export function Chat({ document: doc, onOpen, readyCount, compact = false }) {
                   <div className="sources">
                     <span className="eyebrow">
                       SOURCES ·{" "}
-                      {new Set(m.sources.map((s) => s.documentId)).size} FILES
+                      {new Set(m.sources.map((s) => s.documentId)).size}{" "}
+                      {new Set(m.sources.map((s) => s.documentId)).size === 1
+                        ? "FILE"
+                        : "FILES"}
                     </span>
                     {m.sources
                       .filter(
