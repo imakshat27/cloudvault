@@ -38,7 +38,7 @@ resource('AppSG','EC2::SecurityGroup',GroupDescription='API traffic only from AL
 resource('WorkerSG','EC2::SecurityGroup',GroupDescription='No inbound access to Lambda',VpcId=R('VPC'))
 resource('DatabaseSG','EC2::SecurityGroup',GroupDescription='PostgreSQL only from API and worker',VpcId=R('VPC'),SecurityGroupIngress=[{'IpProtocol':'tcp','FromPort':5432,'ToPort':5432,'SourceSecurityGroupId':R(x)} for x in ['AppSG','WorkerSG']])
 resource('DatabaseSubnets','RDS::DBSubnetGroup',DBSubnetGroupDescription='Private database subnets in two AZs',SubnetIds=[R('PrivateSubnet0'),R('PrivateSubnet1')])
-resource('Database','RDS::DBInstance',Engine='postgres',DBInstanceClass=R('DatabaseClass'),DBName='cloudvault',MasterUsername='cloudvault',ManageMasterUserPassword=True,AllocatedStorage='20',MaxAllocatedStorage=100,StorageType='gp3',StorageEncrypted=True,MultiAZ=R('DatabaseMultiAZ'),BackupRetentionPeriod=7,PubliclyAccessible=False,DBSubnetGroupName=R('DatabaseSubnets'),VPCSecurityGroups=[R('DatabaseSG')],DeletionProtection=True,CopyTagsToSnapshot=True,AutoMinorVersionUpgrade=True)
+resource('Database','RDS::DBInstance',Engine='postgres',DBInstanceClass=R('DatabaseClass'),DBName='cloudvault',MasterUsername='cloudvault',ManageMasterUserPassword=True,AllocatedStorage='20',MaxAllocatedStorage=100,StorageType='gp3',StorageEncrypted=True,MultiAZ=R('DatabaseMultiAZ'),BackupRetentionPeriod=R('BackupRetentionDays'),PubliclyAccessible=False,DBSubnetGroupName=R('DatabaseSubnets'),VPCSecurityGroups=[R('DatabaseSG')],DeletionProtection=True,CopyTagsToSnapshot=True,AutoMinorVersionUpgrade=True)
 resources['Database'].update(DeletionPolicy='Snapshot',UpdateReplacePolicy='Snapshot')
 resource('AppDatabaseSecret','SecretsManager::Secret',Description='Restricted application DB credentials',GenerateSecretString={'SecretStringTemplate':'{"username":"cloudvault_app"}','GenerateStringKey':'password','PasswordLength':48,'ExcludePunctuation':True})
 resource('AppSecret','SecretsManager::Secret',Description='Shared JWT signing key for all CloudVault replicas',GenerateSecretString={'SecretStringTemplate':'{}','GenerateStringKey':'jwtSecret','PasswordLength':64,'ExcludePunctuation':True})
@@ -153,6 +153,7 @@ params={
     'NatGatewayCount':{'Type':'String','Default':'2','AllowedValues':['1','2'],'Description':'One reduces cost; two provide independent outbound routing per AZ'},
     'ApiBaselineCapacity':{'Type':'String','Default':'2','AllowedValues':['1','2'],'Description':'Minimum and desired API replicas'},
     'ApiMaxCapacity':{'Type':'String','Default':'4','AllowedValues':['2','4'],'Description':'Maximum API replicas during scaling'},
+    'BackupRetentionDays':{'Type':'Number','Default':7,'MinValue':1,'MaxValue':35,'Description':'Use one day for AWS Free account plans'},
     'DatabaseClass':{'Type':'String','Default':'db.t4g.micro'},
     'DatabaseMultiAZ':{'Type':'String','Default':'true','AllowedValues':['true','false']},
 }

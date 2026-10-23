@@ -71,6 +71,13 @@
       ],
       "Description": "Maximum API replicas during scaling"
     },
+    "BackupRetentionDays": {
+      "Type": "Number",
+      "Default": 7,
+      "MinValue": 1,
+      "MaxValue": 35,
+      "Description": "Use one day for AWS Free account plans"
+    },
     "DatabaseClass": {
       "Type": "String",
       "Default": "db.t4g.micro"
@@ -490,7 +497,9 @@
         "MultiAZ": {
           "Ref": "DatabaseMultiAZ"
         },
-        "BackupRetentionPeriod": 7,
+        "BackupRetentionPeriod": {
+          "Ref": "BackupRetentionDays"
+        },
         "PubliclyAccessible": false,
         "DBSubnetGroupName": {
           "Ref": "DatabaseSubnets"

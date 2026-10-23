@@ -14,5 +14,9 @@
   {
     "ParameterKey": "DatabaseMultiAZ",
     "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "BackupRetentionDays",
+    "ParameterValue": "1"
   }
 ]

@@ -15,7 +15,7 @@ No access keys or account-specific resource names belong in the repository. Pref
 
 ## Review budget profile
 
-The default remains the two-AZ availability demonstration. For a small class review, merge `infra/profiles/review.json` into your private parameters file. It runs one initial EC2 instance, allows scaling to two, uses single-AZ RDS, and shares one NAT gateway across the two private subnets. It retains ALB, Auto Scaling, S3, RDS/pgvector, SQS, Lambda, Bedrock, IAM, Secrets Manager and CloudWatch.
+The default remains the two-AZ availability demonstration. For a small class review, merge `infra/profiles/review.json` into your private parameters file. It runs one initial EC2 instance, allows scaling to two, uses single-AZ RDS, shares one NAT gateway across the two private subnets, and keeps one day of automated database backups. AWS Free account plans can reject longer retention; no account upgrade is required for this setting. It retains ALB, Auto Scaling, S3, RDS/pgvector, SQS, Lambda, Bedrock, IAM, Secrets Manager and CloudWatch.
 
 This review configuration trades resilience for lower idle spending: one API instance can cause downtime during replacement, single-AZ RDS has no standby, and a shared NAT gateway is an outbound dependency for both AZs. Cross-AZ NAT traffic can incur transfer charges. For the availability exercise, apply `infra/profiles/availability-demo.json`, then return to review settings when the exercise is complete.
 
