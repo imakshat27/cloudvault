@@ -37,8 +37,8 @@ export function AuthProvider({ children }) {
     return res;
   };
 
-  const register = async (email, password) => {
-    const res = await api.register(email, password);
+  const register = async (email, password, inviteCode) => {
+    const res = await api.register(email, password, inviteCode);
     localStorage.setItem("cloudvault_token", res.token);
     localStorage.setItem("cloudvault_user", JSON.stringify(res.user));
     setUser(res.user);

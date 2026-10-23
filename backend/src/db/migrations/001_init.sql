@@ -52,3 +52,10 @@ CREATE INDEX IF NOT EXISTS idx_document_shares_user ON document_shares(shared_wi
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id);
 
 CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding vector_cosine_ops);
+
+CREATE TABLE IF NOT EXISTS daily_usage (
+ user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ usage_date DATE NOT NULL DEFAULT CURRENT_DATE,
+ request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+ PRIMARY KEY (user_id,usage_date)
+);

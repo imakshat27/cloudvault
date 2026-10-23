@@ -5,6 +5,15 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: cloudvault_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-postgres-password
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres -d cloudvault_test" --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,6 +26,17 @@ jobs:
       - run: npm ci --prefix backend
       - run: npm ci --prefix frontend
       - run: npm test --prefix backend
+      - run: node backend/tests/postgres.test.js
+        env:
+          PG_TEST_PASSWORD: ci-only-postgres-password
+      - run: npm test --prefix backend
+        env:
+          CLOUDVAULT_TEST_POSTGRES: "1"
+          PG_TEST_HOST: 127.0.0.1
+          DB_NAME: cloudvault_test
+          DB_USER: cloudvault_app
+          DB_PASSWORD: ci-only-app-password-with-32-characters
+          DB_MIGRATE: "false"
       - run: npm run lint --prefix frontend
       - run: npm run build --prefix frontend
       - run: npm audit --prefix backend --omit=dev

@@ -95,7 +95,12 @@ router.post("/upload-url", requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("[Documents] upload-url error:", err);
-    return res.status(500).json({ error: "Failed to generate upload URL" });
+    return res
+      .status(err.status || 500)
+      .json({
+        error:
+          err.status === 429 ? err.message : "Failed to generate upload URL",
+      });
   }
 });
 

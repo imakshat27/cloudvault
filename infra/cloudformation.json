@@ -507,6 +507,18 @@
       "DeletionPolicy": "Snapshot",
       "UpdateReplacePolicy": "Snapshot"
     },
+    "AppDatabaseSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Description": "Restricted application DB credentials",
+        "GenerateSecretString": {
+          "SecretStringTemplate": "{\"username\":\"cloudvault_app\"}",
+          "GenerateStringKey": "password",
+          "PasswordLength": 48,
+          "ExcludePunctuation": true
+        }
+      }
+    },
     "AppSecret": {
       "Type": "AWS::SecretsManager::Secret",
       "Properties": {
@@ -732,10 +744,7 @@
                       "Ref": "AppSecret"
                     },
                     {
-                      "Fn::GetAtt": [
-                        "Database",
-                        "MasterUserSecret.SecretArn"
-                      ]
+                      "Ref": "AppDatabaseSecret"
                     }
                   ]
                 },
@@ -847,10 +856,7 @@
                     "secretsmanager:GetSecretValue"
                   ],
                   "Resource": {
-                    "Fn::GetAtt": [
-                      "Database",
-                      "MasterUserSecret.SecretArn"
-                    ]
+                    "Ref": "AppDatabaseSecret"
                   }
                 },
                 {
@@ -889,6 +895,140 @@
             }
           }
         ]
+      }
+    },
+    "BootstrapRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "CloudVaultAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "Database",
+                        "MasterUserSecret.SecretArn"
+                      ]
+                    },
+                    {
+                      "Ref": "AppDatabaseSecret"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "BootstrapLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-database-bootstrap"
+        },
+        "RetentionInDays": 14
+      }
+    },
+    "DatabaseBootstrap": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-database-bootstrap"
+        },
+        "Runtime": "nodejs22.x",
+        "Handler": "src/bootstrap/database.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "BootstrapRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 180,
+        "MemorySize": 256,
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ArtifactBucket"
+          },
+          "S3Key": {
+            "Ref": "WorkerArtifactKey"
+          }
+        },
+        "VpcConfig": {
+          "SubnetIds": [
+            {
+              "Ref": "PrivateSubnet0"
+            },
+            {
+              "Ref": "PrivateSubnet1"
+            }
+          ],
+          "SecurityGroupIds": [
+            {
+              "Ref": "WorkerSG"
+            }
+          ]
+        }
+      },
+      "DependsOn": [
+        "BootstrapLogs",
+        "PrivateRoute0",
+        "PrivateRoute1"
+      ]
+    },
+    "DatabaseReady": {
+      "Type": "Custom::CloudVaultDatabase",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "DatabaseBootstrap",
+            "Arn"
+          ]
+        },
+        "ServiceTimeout": 240,
+        "Host": {
+          "Fn::GetAtt": [
+            "Database",
+            "Endpoint.Address"
+          ]
+        },
+        "MasterSecretArn": {
+          "Fn::GetAtt": [
+            "Database",
+            "MasterUserSecret.SecretArn"
+          ]
+        },
+        "AppSecretArn": {
+          "Ref": "AppDatabaseSecret"
+        },
+        "Release": {
+          "Ref": "WorkerArtifactKey"
+        }
       }
     },
     "WorkerLogs": {
@@ -958,11 +1098,10 @@
             "DB_NAME": "cloudvault",
             "DB_SSL": "true",
             "DB_SECRET_ARN": {
-              "Fn::GetAtt": [
-                "Database",
-                "MasterUserSecret.SecretArn"
-              ]
+              "Ref": "AppDatabaseSecret"
             },
+            "DB_MIGRATE": "false",
+            "REGISTRATION_MODE": "invite",
             "STORAGE_MODE": "s3",
             "S3_BUCKET_NAME": {
               "Ref": "Documents"
@@ -981,7 +1120,10 @@
           }
         }
       },
-      "DependsOn": "WorkerLogs"
+      "DependsOn": [
+        "WorkerLogs",
+        "DatabaseReady"
+      ]
     },
     "QueueConsumer": {
       "Type": "AWS::Lambda::EventSourceMapping",
@@ -1132,7 +1274,7 @@
           ],
           "UserData": {
             "Fn::Base64": {
-              "Fn::Sub": "#!/bin/bash\nset -euo pipefail\ndnf install -y nodejs22 nodejs22-npm amazon-cloudwatch-agent\nmkdir -p /opt/cloudvault\naws s3 cp s3://${ArtifactBucket}/${AppArtifactKey} /tmp/app.tar.gz\ntar -xzf /tmp/app.tar.gz -C /opt/cloudvault\nuseradd --system --home-dir /opt/cloudvault cloudvault || true\nchown -R cloudvault:cloudvault /opt/cloudvault\ncat > /etc/cloudvault.env <<'ENV'\nAWS_REGION=${AWS::Region}\nNODE_ENV=production\nDB_HOST=${Database.Endpoint.Address}\nDB_NAME=cloudvault\nDB_SSL=true\nDB_SECRET_ARN=${Database.MasterUserSecret.SecretArn}\nAPP_SECRET_ARN=${AppSecret}\nSTORAGE_MODE=s3\nS3_BUCKET_NAME=${Documents}\nAI_ENGINE=bedrock\nBEDROCK_CHAT_MODEL=${BedrockChatModel}\nSQS_QUEUE_URL=${IngestionQueue}\nCORS_ORIGIN=https://${AppDomain}\nENV\nchmod 600 /etc/cloudvault.env\ncat > /etc/systemd/system/cloudvault.service <<'SERVICE'\n[Unit]\nDescription=CloudVault API and web\nAfter=network-online.target\n[Service]\nUser=cloudvault\nWorkingDirectory=/opt/cloudvault/backend\nEnvironmentFile=/etc/cloudvault.env\nExecStart=/usr/bin/node-22 src/start.js\nRestart=always\nRestartSec=5\nNoNewPrivileges=true\nProtectSystem=strict\nPrivateTmp=true\nStandardOutput=append:/var/log/cloudvault.log\nStandardError=append:/var/log/cloudvault.log\n[Install]\nWantedBy=multi-user.target\nSERVICE\ncat > /opt/aws/amazon-cloudwatch-agent/etc/config.json <<'LOGS'\n{\"logs\":{\"logs_collected\":{\"files\":{\"collect_list\":[{\"file_path\":\"/var/log/cloudvault.log\",\"log_group_name\":\"${ApiLogs}\",\"log_stream_name\":\"{instance_id}\"}]}}}}\nLOGS\n/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json -s\nsystemctl daemon-reload\nsystemctl enable --now cloudvault\n"
+              "Fn::Sub": "#!/bin/bash\nset -euo pipefail\ndnf install -y nodejs22 nodejs22-npm amazon-cloudwatch-agent\nmkdir -p /opt/cloudvault\naws s3 cp s3://${ArtifactBucket}/${AppArtifactKey} /tmp/app.tar.gz\ntar -xzf /tmp/app.tar.gz -C /opt/cloudvault\nuseradd --system --home-dir /opt/cloudvault cloudvault || true\nchown -R cloudvault:cloudvault /opt/cloudvault\ncat > /etc/cloudvault.env <<'ENV'\nAWS_REGION=${AWS::Region}\nNODE_ENV=production\nDB_HOST=${Database.Endpoint.Address}\nDB_NAME=cloudvault\nDB_SSL=true\nDB_SECRET_ARN=${AppDatabaseSecret}\nDB_MIGRATE=false\nREGISTRATION_MODE=invite\nAPP_SECRET_ARN=${AppSecret}\nSTORAGE_MODE=s3\nS3_BUCKET_NAME=${Documents}\nAI_ENGINE=bedrock\nBEDROCK_CHAT_MODEL=${BedrockChatModel}\nSQS_QUEUE_URL=${IngestionQueue}\nCORS_ORIGIN=https://${AppDomain}\nENV\nchmod 600 /etc/cloudvault.env\ncat > /etc/systemd/system/cloudvault.service <<'SERVICE'\n[Unit]\nDescription=CloudVault API and web\nAfter=network-online.target\n[Service]\nUser=cloudvault\nWorkingDirectory=/opt/cloudvault/backend\nEnvironmentFile=/etc/cloudvault.env\nExecStart=/usr/bin/node-22 src/start.js\nRestart=always\nRestartSec=5\nNoNewPrivileges=true\nProtectSystem=strict\nPrivateTmp=true\nStandardOutput=append:/var/log/cloudvault.log\nStandardError=append:/var/log/cloudvault.log\n[Install]\nWantedBy=multi-user.target\nSERVICE\ncat > /opt/aws/amazon-cloudwatch-agent/etc/config.json <<'LOGS'\n{\"logs\":{\"logs_collected\":{\"files\":{\"collect_list\":[{\"file_path\":\"/var/log/cloudvault.log\",\"log_group_name\":\"${ApiLogs}\",\"log_stream_name\":\"{instance_id}\"}]}}}}\nLOGS\n/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/config.json -s\nsystemctl daemon-reload\nsystemctl enable --now cloudvault\n"
             }
           }
         }
@@ -1187,7 +1329,8 @@
       "DependsOn": [
         "PrivateRoute0",
         "PrivateRoute1",
-        "HTTPSListener"
+        "HTTPSListener",
+        "DatabaseReady"
       ],
       "UpdatePolicy": {
         "AutoScalingRollingUpdate": {
@@ -1364,6 +1507,11 @@
     }
   },
   "Outputs": {
+    "AppSecretArn": {
+      "Value": {
+        "Ref": "AppSecret"
+      }
+    },
     "ApplicationURL": {
       "Value": {
         "Fn::Sub": "https://${AppDomain}"

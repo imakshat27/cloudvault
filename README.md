@@ -6,7 +6,7 @@ A document workspace with natural-language file discovery, permission-aware retr
 
 ## What works
 
-- Email/password registration and sign-in; bcrypt password hashes and expiring JWT sessions.
+- Email/password registration and sign-in; invite-only registration for cloud reviews, bcrypt password hashes and expiring JWT sessions.
 - Upload PDF, DOCX, TXT, and Markdown files (25 MB maximum).
 - File library with grid/list layouts, filename filtering, content search, type filters, sorting, and personal stars.
 - PDF viewing and extracted-text viewing for other supported documents; authenticated downloads.
@@ -64,7 +64,7 @@ flowchart LR
 
 The upload-completion API publishes the indexing event after the browser finishes its S3 PUT. Lambda extracts text, creates overlapping chunks, embeds them into 1024-dimensional vectors, and writes them to pgvector. Retrieval filters document access in the database before returning source passages to the model.
 
-The infrastructure provisions **55 resources** covering VPC networking, private compute, EC2, ALB, Auto Scaling, encrypted RDS, private S3, SQS and its DLQ, Lambda, IAM, Secrets Manager, CloudWatch, SNS, and an optional Route 53 record. It uses an existing ACM certificate, SSM's public AMI parameter, and an existing artifact bucket. A smaller class-review profile reduces idle capacity while retaining the service integrations. See [the deployment guide](infra/AWS_SETUP_GUIDE.md) and [the class architecture report](CloudVault_System_Architecture.md).
+The infrastructure provisions **60 resources** covering VPC networking, private compute, EC2, ALB, Auto Scaling, encrypted RDS, private S3, SQS and its DLQ, Lambda, IAM, Secrets Manager, CloudWatch, SNS, and an optional Route 53 record. It uses an existing ACM certificate, SSM's public AMI parameter, and an existing artifact bucket. A smaller class-review profile reduces idle capacity while retaining the service integrations. See [the deployment guide](infra/AWS_SETUP_GUIDE.md) and [the class architecture report](CloudVault_System_Architecture.md).
 
 ## Docker
 
@@ -91,10 +91,12 @@ python3 infra/stack.py
 cfn-lint infra/cloudformation.json
 ```
 
-The API integration test uses temporary storage and verifies registration, invalid authentication, upload authorization, indexing, document-scoped retrieval, content search, downloads, sharing, revoked access, deletion, and cross-user isolation. GitHub Actions runs these checks on pushes and pull requests. Browser flows were checked on desktop and at 375px width. Automated axe checks found no WCAG 2 A/AA or 2.1 AA violations in the tested sign-in, library, and research-chat states; live AWS, Bedrock, and RDS failover need validation after deployment.
+CI also runs the API lifecycle against real PostgreSQL/pgvector using a restricted application role and verifies that role cannot create tables, roles, or read password hashes. The API integration test uses temporary storage and verifies registration, invalid authentication, upload authorization, indexing, document-scoped retrieval, content search, downloads, sharing, revoked access, deletion, and cross-user isolation. GitHub Actions runs these checks on pushes and pull requests. Browser flows were checked on desktop and at 375px width. Automated axe checks found no WCAG 2 A/AA or 2.1 AA violations in the tested sign-in, library, and research-chat states; live AWS, Bedrock, and RDS failover need validation after deployment.
 
 ## Practical boundaries
 
 Scanned/image-only PDFs require OCR before upload. DOCX previews show extracted text; Markdown is rendered safely. Original page layout is preserved only for PDFs. Chat is session-local and currently keeps previous **user questions**, not a full persisted conversation history. Sharing is read-only and requires an existing account. Stars are stored in the browser per account.
 
-The local JSON database is for one development process. Cloud deployments require PostgreSQL. Long-lived AWS access keys are not needed: the SDK uses its default credential chain. Generated artifacts, environment files, upload contents, and local database records are ignored by Git. If old credentials were ever used or distributed, revoke them at their providers; deleting a copy cannot revoke a credential.
+The local JSON database is for one development process. Cloud deployments require PostgreSQL. Cloud accounts default to 50 files and 250 MB per user, with 100 combined content-search/AI requests per user per UTC day. Production sign-up requires a private invitation code derived from the signing secret; the public options endpoint reveals only whether invitations are required.
+
+Long-lived AWS access keys are not needed: the SDK uses its default credential chain. Generated artifacts, environment files, upload contents, and local database records are ignored by Git. If old credentials were ever used or distributed, revoke them at their providers; deleting a copy cannot revoke a credential.

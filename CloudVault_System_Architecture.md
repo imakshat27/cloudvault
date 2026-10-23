@@ -80,7 +80,7 @@ Retrieval is top-k, so a query can return imperfect matches. Prompts reduce hall
 
 Access checks apply to listing, status, viewing, downloading, sharing, deletion, retrieval, and document-scoped chat. Owners alone can share, revoke, delete, or reindex. Local upload endpoints require an authenticated owner and a pending upload; path resolution cannot escape the upload directory.
 
-Production uses a shared randomly generated JWT secret, hashed passwords, TLS, restricted CORS, security headers, auth/answer rate limits, private network placement, encrypted storage, and IAM roles. New PostgreSQL connections fetch the current managed password so RDS secret rotation can be picked up. The classroom stack bootstraps schema with the RDS managed master user; a dedicated restricted application DB role is an explicit hardening step before organizational use. JWT sessions are browser-local, expire, and are invalidated if the signing secret changes.
+Production uses a shared randomly generated JWT secret, hashed passwords, TLS, restricted CORS, security headers, auth/answer rate limits, private network placement, encrypted storage, and IAM roles. New PostgreSQL connections fetch the current managed password so RDS secret rotation can be picked up. Only the deployment bootstrap function uses the RDS managed master user; a separate bootstrap Lambda provisions a dedicated restricted application DB role. Runtime services cannot read the master secret. JWT sessions are browser-local, expire, and are invalidated if the signing secret changes.
 
 ## Availability, elasticity, and fault tolerance
 
@@ -98,6 +98,6 @@ S3 versioning and RDS snapshots help recovery but can retain historical content 
 
 ## Validation and limitations
 
-Local integration tests cover the authentication and storage lifecycle, private upload/download access, successful indexing, document-scoped retrieval, read-only sharing, revocation, and cross-user isolation. The frontend is built and linted, dependencies audited, and browser flows checked at desktop and phone widths. CloudFormation is checked with `cfn-lint`.
+CI verifies the database bootstrap and denied DDL/role/password access for the restricted runtime role, then runs the API lifecycle on real PostgreSQL/pgvector. Local integration tests cover the authentication and storage lifecycle, private upload/download access, successful indexing, document-scoped retrieval, read-only sharing, revocation, and cross-user isolation. The frontend is built and linted, dependencies audited, and browser flows checked at desktop and phone widths. CloudFormation is checked with `cfn-lint`.
 
 Live Bedrock calls, production PostgreSQL performance, AWS resource creation, Docker execution, and failover/load exercises need the corresponding available runtime/account. Current document extraction does not provide OCR. DOCX previews are extracted text and Markdown is rendered safely. Conversation history is session-local; previous user questions are used for context. Stars are browser-local. There is no public anonymous link sharing or email invitation delivery.

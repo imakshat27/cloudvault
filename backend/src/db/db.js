@@ -44,6 +44,10 @@ class PostgresAdapter {
     );
     const client = await this.pool.connect();
     try {
+      if (!config.db.migrate) {
+        await client.query("SELECT 1");
+        return;
+      }
       // Serialize schema setup across API replicas and Lambda cold starts.
       await client.query("SELECT pg_advisory_lock(842139)");
       // Enable pgvector and uuid
@@ -63,7 +67,8 @@ class PostgresAdapter {
         "[DB] PostgreSQL + pgvector connected and initialized successfully.",
       );
     } finally {
-      await client.query("SELECT pg_advisory_unlock(842139)");
+      if (config.db.migrate)
+        await client.query("SELECT pg_advisory_unlock(842139)");
       client.release();
     }
   }
@@ -107,19 +112,50 @@ class PostgresAdapter {
 
   // Document queries
   async createDocument({ ownerId, filename, s3Key, fileSize, mimeType }) {
-    const res = await this.pool.query(
-      `INSERT INTO documents (owner_id, filename, s3_key, file_size, mime_type, status)
-       VALUES ($1, $2, $3, $4, $5, 'pending')
-       RETURNING *`,
-      [
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
         ownerId,
-        filename,
-        s3Key,
-        fileSize || 0,
-        mimeType || "application/octet-stream",
-      ],
+      ]);
+      const {
+        rows: [usage],
+      } = await client.query(
+        "SELECT COUNT(*)::int AS files, COALESCE(SUM(file_size),0)::bigint AS bytes FROM documents WHERE owner_id = $1",
+        [ownerId],
+      );
+      if (
+        usage.files >= config.limits.maxFiles ||
+        Number(usage.bytes) + fileSize > config.limits.maxStorageBytes
+      ) {
+        const error = new Error(
+          "Your workspace storage limit has been reached. Delete a file before uploading another.",
+        );
+        error.status = 429;
+        throw error;
+      }
+      const result = await client.query(
+        `INSERT INTO documents (owner_id,filename,s3_key,file_size,mime_type,status) VALUES ($1,$2,$3,$4,$5,'pending') RETURNING *`,
+        [ownerId, filename, s3Key, fileSize, mimeType],
+      );
+      await client.query("COMMIT");
+      return result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async consumeAiRequest(userId) {
+    const result = await this.pool.query(
+      `INSERT INTO daily_usage (user_id,usage_date,request_count) VALUES ($1,CURRENT_DATE,1)
+      ON CONFLICT (user_id,usage_date) DO UPDATE SET request_count = daily_usage.request_count + 1
+      WHERE daily_usage.request_count < $2 RETURNING request_count`,
+      [userId, config.limits.dailyRequests],
     );
-    return res.rows[0];
+    return result.rowCount > 0;
   }
 
   async getDocumentById(id) {
@@ -353,6 +389,18 @@ class LocalEmbeddedAdapter {
 
   // Document queries
   async createDocument({ ownerId, filename, s3Key, fileSize, mimeType }) {
+    const owned = this.data.documents.filter((d) => d.owner_id === ownerId);
+    if (
+      owned.length >= config.limits.maxFiles ||
+      owned.reduce((total, d) => total + Number(d.file_size), 0) + fileSize >
+        config.limits.maxStorageBytes
+    ) {
+      const error = new Error(
+        "Your workspace storage limit has been reached. Delete a file before uploading another.",
+      );
+      error.status = 429;
+      throw error;
+    }
     const doc = {
       id: crypto.randomUUID(),
       owner_id: ownerId,
@@ -368,6 +416,23 @@ class LocalEmbeddedAdapter {
     this.data.documents.push(doc);
     this._save();
     return doc;
+  }
+
+  async consumeAiRequest(userId) {
+    this.data.daily_usage ||= [];
+    const today = new Date().toISOString().slice(0, 10);
+    this.data.daily_usage = this.data.daily_usage.filter(
+      (x) => x.date === today,
+    );
+    let usage = this.data.daily_usage.find((x) => x.userId === userId);
+    if (!usage) {
+      usage = { userId, date: today, count: 0 };
+      this.data.daily_usage.push(usage);
+    }
+    if (usage.count >= config.limits.dailyRequests) return false;
+    usage.count++;
+    this._save();
+    return true;
   }
 
   async getDocumentById(id) {

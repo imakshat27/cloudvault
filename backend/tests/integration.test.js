@@ -10,9 +10,15 @@ Object.assign(process.env, {
   STORAGE_MODE: "local",
   PORT: "0",
   NODE_ENV: "test",
-  DB_HOST: "",
+  DB_HOST:
+    process.env.CLOUDVAULT_TEST_POSTGRES === "1"
+      ? process.env.PG_TEST_HOST || "127.0.0.1"
+      : "",
   SQS_QUEUE_URL: "",
 });
+const { config } = await import("../src/config/env.js");
+const { registrationInviteCode } = await import("../src/services/invite.js");
+const { db } = await import("../src/db/db.js");
 const { startServer } = await import("../src/app.js");
 const server = await startServer();
 const base = `http://127.0.0.1:${server.address().port}/api`;
@@ -64,6 +70,34 @@ try {
     ).status,
     400,
   );
+  config.registrationMode = "invite";
+  assert.equal((await call("/auth/options")).data.registrationMode, "invite");
+  assert.equal(
+    (
+      await call("/auth/register", null, {
+        email: "reviewer@example.com",
+        password: "test-password-123",
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await call("/auth/register", null, {
+        email: "reviewer@example.com",
+        password: "test-password-123",
+        inviteCode: "é".repeat(32),
+      })
+    ).status,
+    403,
+  );
+  const reviewer = await call("/auth/register", null, {
+    email: "reviewer@example.com",
+    password: "test-password-123",
+    inviteCode: registrationInviteCode(),
+  });
+  assert.equal(reviewer.status, 201);
+  config.registrationMode = "open";
   const content =
     "The Andromeda project uses SQS for decoupling and RDS pgvector for vector search. Its launch budget is 4200 credits.";
   const make = async (filename, text) => {
@@ -116,6 +150,17 @@ try {
     "Orion.md",
     "Orion uses a completely different design and a budget of 900 credits.",
   );
+  config.limits.maxFiles = 2;
+  assert.equal(
+    (
+      await call("/documents/upload-url", a, {
+        filename: "over-quota.txt",
+        fileSize: 10,
+      })
+    ).status,
+    429,
+  );
+  config.limits.maxFiles = 50;
   assert.equal((await call(`/documents/${id}/status`, b)).status, 404);
   assert.equal(
     (await call(`/documents/${id}/content?text=true`, b)).status,
@@ -190,10 +235,32 @@ try {
     0,
   );
   assert.equal((await call(`/documents/${id}`, a, null, "DELETE")).status, 200);
+  config.limits.dailyRequests = 1;
+  assert.equal(
+    (
+      await call("/ask", reviewer.data.token, {
+        question: "What can I access?",
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await call("/ask", reviewer.data.token, {
+        question: "What can I access?",
+      })
+    ).status,
+    429,
+  );
+  assert.equal(
+    (await call("/search", reviewer.data.token, { query: "documents" })).status,
+    429,
+  );
   console.log(
     "PASS: authentication, uploads, indexing, scoped RAG, search, preview/download, sharing/revocation, deletion and cross-user isolation",
   );
 } finally {
   await new Promise((r) => server.close(r));
+  if (db.pool) await db.pool.end();
   await rm(dir, { recursive: true, force: true });
 }

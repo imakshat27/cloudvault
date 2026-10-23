@@ -1,3 +1,4 @@
+import { validInviteCode } from "../services/invite.js";
 import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -13,10 +14,14 @@ function generateToken(user) {
   });
 }
 
+router.get("/options", (req, res) =>
+  res.json({ registrationMode: config.registrationMode }),
+);
+
 // POST /auth/register
 router.post("/register", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, inviteCode } = req.body;
 
     if (
       typeof email !== "string" ||
@@ -36,6 +41,10 @@ router.post("/register", async (req, res) => {
         .json({ error: "Password must be at least 10 characters long." });
     }
 
+    if (config.registrationMode === "invite" && !validInviteCode(inviteCode))
+      return res
+        .status(403)
+        .json({ error: "A valid review invitation code is required." });
     const normalizedEmail = email.trim().toLowerCase();
     const existing = await db.findUserByEmail(normalizedEmail);
     if (existing) {

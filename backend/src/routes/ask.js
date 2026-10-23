@@ -39,6 +39,13 @@ router.post("/", requireAuth, async (req, res) => {
       )
     )
       return res.status(404).json({ error: "Document not found" });
+    if (!(await db.consumeAiRequest(req.user.id)))
+      return res
+        .status(429)
+        .json({
+          error:
+            "Your daily search and AI question limit has been reached. Try again tomorrow (UTC).",
+        });
     // 1. Generate question embedding vector
     const questionEmbedding = await aiService.generateEmbedding(
       [...history.slice(-2), trimmedQuestion].join("\n").slice(-12000),

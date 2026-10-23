@@ -85,9 +85,21 @@ aws cloudformation wait stack-create-complete --stack-name cloudvault
 aws cloudformation describe-stacks --stack-name cloudvault --query 'Stacks[0].Outputs'
 ```
 
-The template accepts the AWS-managed current Amazon Linux 2023 image through an SSM parameter. EC2 instances run `node-22` under systemd, fetch DB/JWT values from Secrets Manager with their instance role, and send logs to CloudWatch. RDS provisions its managed master secret. DB traffic verifies the RDS CA certificate. The initialization code serializes schema setup across replicas with a PostgreSQL advisory lock.
+The template accepts the AWS-managed current Amazon Linux 2023 image through an SSM parameter. EC2 instances run `node-22` under systemd, fetch DB/JWT values from Secrets Manager with their instance role, and send logs to CloudWatch. RDS provisions its managed master secret. DB traffic verifies the RDS CA certificate. A separate bootstrap Lambda initializes extensions/tables and provisions a restricted application role. Runtime API/worker roles read only the application DB secret; they cannot read the RDS master secret. Runtime schema migration is disabled.
 
 If your model uses a cross-region inference profile, confirm your account's model availability and organization policies permit the destinations. Update the IAM model resources if your chosen profile requires additional scopes. The embedding worker is limited to Titan V2 in the deployment region.
+
+## Registration and usage controls
+
+The AWS deployment uses invite-only registration. The invitation code is derived from the JWT signing secret so rotating that secret also rotates the invitation code and invalidates sessions. Do not put the code or signing key in Git or public documentation.
+
+To display the invitation code privately in your authenticated CloudShell, first use the `AppSecretArn` stack output as the secret ID, then pipe the retrieved JSON directly into Node; never print the signing key:
+
+```bash
+aws secretsmanager get-secret-value --secret-id "$CV_APP_SECRET_ARN" --query SecretString --output text | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(require("node:crypto").createHmac("sha256",JSON.parse(s).jwtSecret).update("cloudvault-registration-v1").digest("hex").slice(0,32)))'
+```
+
+Share this code only with the reviewers who should be able to create an account. File sharing remains separately permissioned. The default account limits are 50 files, 250 MB and 100 combined semantic-search/AI requests per UTC day. Storage reservations and daily counters are atomic in PostgreSQL across replicas. Failed AI attempts count toward the daily allowance because they may have already incurred inference work.
 
 ## 4. Verify the cloud path
 
@@ -112,7 +124,7 @@ Do not report these exercises as passed before running them in your account.
 - Bedrock uses [Titan V2 embeddings](https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html) and [Converse](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html).
 - After an embedding-model/engine change, reindex every file before serving retrieval from the new model.
 - JWT secret changes invalidate sessions. Restart app instances after changing the JWT secret.
-- RDS master credentials are loaded from Secrets Manager; use a dedicated application DB role with restricted SQL privileges before using this for a real organization. The classroom stack uses the managed master user to bootstrap extensions and tables.
+- Only the database-bootstrap Lambda reads the RDS master secret. The API and indexer use a separate role limited to schema usage and table CRUD. App-DB password changes must be coordinated with a bootstrap update; master-secret rotation is independent.
 - Queries are permission-filtered; filenames and question text should not be added to production request logs.
 
 ## Update a release

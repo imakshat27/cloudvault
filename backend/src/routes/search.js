@@ -22,6 +22,13 @@ router.post("/", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Query is too long" });
     const trimmedQuery = query.trim();
 
+    if (!(await db.consumeAiRequest(req.user.id)))
+      return res
+        .status(429)
+        .json({
+          error:
+            "Your daily search and AI question limit has been reached. Try again tomorrow (UTC).",
+        });
     // 1. Generate query embedding vector (1024-dim)
     const queryEmbedding = await aiService.generateEmbedding(trimmedQuery);
 

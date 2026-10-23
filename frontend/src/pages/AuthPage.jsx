@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { api } from "../services/api";
+import { useState, useEffect } from "react";
 import {
   Cloud,
   ArrowUpRight,
@@ -13,6 +14,14 @@ export function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [registrationMode, setRegistrationMode] = useState("invite");
+  useEffect(() => {
+    api
+      .authOptions()
+      .then((r) => setRegistrationMode(r.registrationMode))
+      .catch(() => {});
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { login, register } = useAuth();
@@ -21,7 +30,7 @@ export function AuthPage() {
     setBusy(true);
     setError("");
     try {
-      await (isLogin ? login : register)(email, password);
+      await (isLogin ? login : register)(email, password, inviteCode);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -89,6 +98,25 @@ export function AuthPage() {
               : "Create your account and start connecting the dots."}
           </p>
           <form onSubmit={submit}>
+            {!isLogin && registrationMode === "invite" && (
+              <>
+                <label htmlFor="invite-code">Review invitation code</label>
+                <input
+                  id="invite-code"
+                  type="password"
+                  autoComplete="off"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value.trim())}
+                  minLength={32}
+                  maxLength={32}
+                  required
+                  placeholder="Provided by your workspace host"
+                />
+                <small className="muted">
+                  Sign-up is limited to invited reviewers.
+                </small>
+              </>
+            )}
             <label htmlFor="email">Email address</label>
             <input
               id="email"

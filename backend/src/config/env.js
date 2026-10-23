@@ -28,7 +28,16 @@ export const config = {
     secret: process.env.JWT_SECRET || crypto.randomBytes(48).toString("hex"),
     expiresIn: process.env.JWT_EXPIRES_IN || "8h",
   },
+  registrationMode:
+    process.env.REGISTRATION_MODE || (production ? "invite" : "open"),
+  limits: {
+    maxFiles: Number(process.env.MAX_FILES_PER_USER || 50),
+    maxStorageBytes:
+      Number(process.env.MAX_STORAGE_MB_PER_USER || 250) * 1024 * 1024,
+    dailyRequests: Number(process.env.MAX_DAILY_AI_REQUESTS || 100),
+  },
   db: {
+    migrate: process.env.DB_MIGRATE !== "false",
     host: process.env.DB_HOST,
     port: Number(process.env.DB_PORT || 5432),
     database: process.env.DB_NAME || "cloudvault",
@@ -72,3 +81,6 @@ if (config.ai.engine === "bedrock" && !config.ai.chatModel)
   throw new Error("BEDROCK_CHAT_MODEL is required for Bedrock mode");
 if (config.aws.queueUrl && (!config.db.host || config.aws.storageMode !== "s3"))
   throw new Error("SQS indexing requires shared PostgreSQL and S3 storage");
+
+if (!["open", "invite"].includes(config.registrationMode))
+  throw new Error("REGISTRATION_MODE must be open or invite");

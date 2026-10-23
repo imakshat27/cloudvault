@@ -40,6 +40,7 @@ resource('DatabaseSG','EC2::SecurityGroup',GroupDescription='PostgreSQL only fro
 resource('DatabaseSubnets','RDS::DBSubnetGroup',DBSubnetGroupDescription='Private database subnets in two AZs',SubnetIds=[R('PrivateSubnet0'),R('PrivateSubnet1')])
 resource('Database','RDS::DBInstance',Engine='postgres',DBInstanceClass=R('DatabaseClass'),DBName='cloudvault',MasterUsername='cloudvault',ManageMasterUserPassword=True,AllocatedStorage='20',MaxAllocatedStorage=100,StorageType='gp3',StorageEncrypted=True,MultiAZ=R('DatabaseMultiAZ'),BackupRetentionPeriod=7,PubliclyAccessible=False,DBSubnetGroupName=R('DatabaseSubnets'),VPCSecurityGroups=[R('DatabaseSG')],DeletionProtection=True,CopyTagsToSnapshot=True,AutoMinorVersionUpgrade=True)
 resources['Database'].update(DeletionPolicy='Snapshot',UpdateReplacePolicy='Snapshot')
+resource('AppDatabaseSecret','SecretsManager::Secret',Description='Restricted application DB credentials',GenerateSecretString={'SecretStringTemplate':'{"username":"cloudvault_app"}','GenerateStringKey':'password','PasswordLength':48,'ExcludePunctuation':True})
 resource('AppSecret','SecretsManager::Secret',Description='Shared JWT signing key for all CloudVault replicas',GenerateSecretString={'SecretStringTemplate':'{}','GenerateStringKey':'jwtSecret','PasswordLength':64,'ExcludePunctuation':True})
 resource('Documents','S3::Bucket',BucketEncryption={'ServerSideEncryptionConfiguration':[{'ServerSideEncryptionByDefault':{'SSEAlgorithm':'AES256'}}]},PublicAccessBlockConfiguration={'BlockPublicAcls':True,'BlockPublicPolicy':True,'IgnorePublicAcls':True,'RestrictPublicBuckets':True},VersioningConfiguration={'Status':'Enabled'},CorsConfiguration={'CorsRules':[{'AllowedOrigins':[S('https://${AppDomain}')],'AllowedMethods':['PUT'],'AllowedHeaders':['content-type','if-none-match'],'MaxAge':900}]},LifecycleConfiguration={'Rules':[{'Id':'AbortIncompleteUploads','Status':'Enabled','AbortIncompleteMultipartUpload':{'DaysAfterInitiation':1}}]})
 resources['Documents'].update(DeletionPolicy='Retain',UpdateReplacePolicy='Retain')
@@ -48,7 +49,7 @@ resource('DeadLetterQueue','SQS::Queue',FifoQueue=True,MessageRetentionPeriod=12
 resource('IngestionQueue','SQS::Queue',FifoQueue=True,VisibilityTimeout=1800,MessageRetentionPeriod=345600,SqsManagedSseEnabled=True,RedrivePolicy={'deadLetterTargetArn':A('DeadLetterQueue'),'maxReceiveCount':3})
 for name in ['IngestionQueue','DeadLetterQueue']:
     resource(name+'Policy','SQS::QueuePolicy',Queues=[R(name)],PolicyDocument={'Version':'2012-10-17','Statement':[{'Effect':'Deny','Principal':'*','Action':'sqs:*','Resource':A(name),'Condition':{'Bool':{'aws:SecureTransport':'false'}}}]})
-secretAccess=policy(['secretsmanager:GetSecretValue'],[R('AppSecret'),A('Database','MasterUserSecret.SecretArn')])
+secretAccess=policy(['secretsmanager:GetSecretValue'],[R('AppSecret'),R('AppDatabaseSecret')])
 modelResources=[S('arn:${AWS::Partition}:bedrock:*::foundation-model/*'),S('arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*')]
 role('ApiRole','ec2.amazonaws.com',[
     secretAccess,
@@ -60,16 +61,24 @@ role('ApiRole','ec2.amazonaws.com',[
 ], [S('arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore')])
 resource('ApiProfile','IAM::InstanceProfile',Roles=[R('ApiRole')])
 role('WorkerRole','lambda.amazonaws.com',[
-    policy(['secretsmanager:GetSecretValue'], A('Database','MasterUserSecret.SecretArn')),
+    policy(['secretsmanager:GetSecretValue'], R('AppDatabaseSecret')),
     policy(['s3:GetObject'],S('${Documents.Arn}/uploads/*')),
     policy(['sqs:ReceiveMessage','sqs:DeleteMessage','sqs:GetQueueAttributes'],A('IngestionQueue')),
     policy(['bedrock:InvokeModel'],S('arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0')),
 ], [S('arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole')])
+# Privileged schema setup runs once through a separate CloudFormation custom resource.
+role('BootstrapRole','lambda.amazonaws.com',[
+    policy(['secretsmanager:GetSecretValue'],[A('Database','MasterUserSecret.SecretArn'),R('AppDatabaseSecret')]),
+], [S('arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole')])
+resource('BootstrapLogs','Logs::LogGroup',LogGroupName=S('/aws/lambda/${AWS::StackName}-database-bootstrap'),RetentionInDays=14)
+resource('DatabaseBootstrap','Lambda::Function',FunctionName=S('${AWS::StackName}-database-bootstrap'),Runtime='nodejs22.x',Handler='src/bootstrap/database.handler',Role=A('BootstrapRole'),Timeout=180,MemorySize=256,Code={'S3Bucket':R('ArtifactBucket'),'S3Key':R('WorkerArtifactKey')},VpcConfig={'SubnetIds':[R('PrivateSubnet0'),R('PrivateSubnet1')],'SecurityGroupIds':[R('WorkerSG')]})
+resources['DatabaseBootstrap']['DependsOn']=['BootstrapLogs','PrivateRoute0','PrivateRoute1']
+resources['DatabaseReady']={'Type':'Custom::CloudVaultDatabase','Properties':{'ServiceToken':A('DatabaseBootstrap'),'ServiceTimeout':240,'Host':A('Database','Endpoint.Address'),'MasterSecretArn':A('Database','MasterUserSecret.SecretArn'),'AppSecretArn':R('AppDatabaseSecret'),'Release':R('WorkerArtifactKey')}}
 resource('WorkerLogs','Logs::LogGroup',LogGroupName=S('/aws/lambda/${AWS::StackName}-ingest'),RetentionInDays=14)
 resource('ApiLogs','Logs::LogGroup',RetentionInDays=14)
-commonEnv={'NODE_ENV':'production','DB_HOST':A('Database','Endpoint.Address'),'DB_NAME':'cloudvault','DB_SSL':'true','DB_SECRET_ARN':A('Database','MasterUserSecret.SecretArn'),'APP_SECRET_ARN':R('AppSecret'),'STORAGE_MODE':'s3','S3_BUCKET_NAME':R('Documents'),'AI_ENGINE':'bedrock','BEDROCK_CHAT_MODEL':R('BedrockChatModel'),'SQS_QUEUE_URL':R('IngestionQueue'),'CORS_ORIGIN':S('https://${AppDomain}')}
+commonEnv={'NODE_ENV':'production','DB_HOST':A('Database','Endpoint.Address'),'DB_NAME':'cloudvault','DB_SSL':'true','DB_SECRET_ARN':R('AppDatabaseSecret'),'DB_MIGRATE':'false','REGISTRATION_MODE':'invite','APP_SECRET_ARN':R('AppSecret'),'STORAGE_MODE':'s3','S3_BUCKET_NAME':R('Documents'),'AI_ENGINE':'bedrock','BEDROCK_CHAT_MODEL':R('BedrockChatModel'),'SQS_QUEUE_URL':R('IngestionQueue'),'CORS_ORIGIN':S('https://${AppDomain}')}
 resource('Worker','Lambda::Function',FunctionName=S('${AWS::StackName}-ingest'),Runtime='nodejs22.x',Handler='src/worker.handler',Role=A('WorkerRole'),Timeout=300,MemorySize=1024,ReservedConcurrentExecutions=5,Code={'S3Bucket':R('ArtifactBucket'),'S3Key':R('WorkerArtifactKey')},VpcConfig={'SubnetIds':[R('PrivateSubnet0'),R('PrivateSubnet1')],'SecurityGroupIds':[R('WorkerSG')]},Environment={'Variables':{**{k:v for k,v in commonEnv.items() if k != 'APP_SECRET_ARN'}, 'RUNTIME_ROLE':'worker'}})
-resources['Worker']['DependsOn']='WorkerLogs'
+resources['Worker']['DependsOn']=['WorkerLogs','DatabaseReady']
 resource('QueueConsumer','Lambda::EventSourceMapping',EventSourceArn=A('IngestionQueue'),FunctionName=R('Worker'),BatchSize=1,FunctionResponseTypes=['ReportBatchItemFailures'],Enabled=True)
 resource('LoadBalancer','ElasticLoadBalancingV2::LoadBalancer',Scheme='internet-facing',Subnets=[R('PublicSubnet0'),R('PublicSubnet1')],SecurityGroups=[R('LoadBalancerSG')],LoadBalancerAttributes=[{'Key':'idle_timeout.timeout_seconds','Value':'120'}])
 resource('TargetGroup','ElasticLoadBalancingV2::TargetGroup',Port=3000,Protocol='HTTP',VpcId=R('VPC'),HealthCheckPath='/api/health',Matcher={'HttpCode':'200'},TargetGroupAttributes=[{'Key':'deregistration_delay.timeout_seconds','Value':'30'}])
@@ -118,7 +127,7 @@ systemctl enable --now cloudvault
 '''
 resource('LaunchTemplate','EC2::LaunchTemplate',LaunchTemplateData={'ImageId':R('AmiId'),'InstanceType':R('InstanceType'),'IamInstanceProfile':{'Arn':A('ApiProfile')},'SecurityGroupIds':[R('AppSG')],'MetadataOptions':{'HttpTokens':'required','HttpEndpoint':'enabled'},'BlockDeviceMappings':[{'DeviceName':'/dev/xvda','Ebs':{'VolumeSize':16,'VolumeType':'gp3','Encrypted':True}}],'UserData':{'Fn::Base64':S(userData)}})
 resource('ApiFleet','AutoScaling::AutoScalingGroup',MinSize=R('ApiBaselineCapacity'),MaxSize=R('ApiMaxCapacity'),DesiredCapacity=R('ApiBaselineCapacity'),VPCZoneIdentifier=[R('PrivateSubnet0'),R('PrivateSubnet1')],TargetGroupARNs=[R('TargetGroup')],HealthCheckType='ELB',HealthCheckGracePeriod=600,LaunchTemplate={'LaunchTemplateId':R('LaunchTemplate'),'Version':A('LaunchTemplate','LatestVersionNumber')},Tags=[{'Key':'Name','Value':'CloudVault API','PropagateAtLaunch':True}])
-resources['ApiFleet']['DependsOn']=['PrivateRoute0','PrivateRoute1','HTTPSListener']
+resources['ApiFleet']['DependsOn']=['PrivateRoute0','PrivateRoute1','HTTPSListener','DatabaseReady']
 resources['ApiFleet']['UpdatePolicy']={'AutoScalingRollingUpdate':{'MaxBatchSize':1,'MinInstancesInService':1,'PauseTime':'PT5M'}}
 resource('ScalingPolicy','AutoScaling::ScalingPolicy',AutoScalingGroupName=R('ApiFleet'),PolicyType='TargetTrackingScaling',TargetTrackingConfiguration={'PredefinedMetricSpecification':{'PredefinedMetricType':'ASGAverageCPUUtilization'},'TargetValue':60})
 resource('DNS','Route53::RecordSet',HostedZoneId=R('HostedZoneId'),Name=R('AppDomain'),Type='A',AliasTarget={'DNSName':A('LoadBalancer','DNSName'),'HostedZoneId':A('LoadBalancer','CanonicalHostedZoneID')})
@@ -147,7 +156,7 @@ params={
     'DatabaseClass':{'Type':'String','Default':'db.t4g.micro'},
     'DatabaseMultiAZ':{'Type':'String','Default':'true','AllowedValues':['true','false']},
 }
-outputs={'ApplicationURL':{'Value':S('https://${AppDomain}')},'ArtifactBucket':{'Value':R('ArtifactBucket')},'FilesBucket':{'Value':R('Documents')},'DeadLetterQueueURL':{'Value':R('DeadLetterQueue')},'AlarmTopicArn':{'Value':R('Alerts')},'ApiLogGroup':{'Value':R('ApiLogs')},'LoadBalancerDNS':{'Value':A('LoadBalancer','DNSName')}}
+outputs={'AppSecretArn':{'Value':R('AppSecret')},'ApplicationURL':{'Value':S('https://${AppDomain}')},'ArtifactBucket':{'Value':R('ArtifactBucket')},'FilesBucket':{'Value':R('Documents')},'DeadLetterQueueURL':{'Value':R('DeadLetterQueue')},'AlarmTopicArn':{'Value':R('Alerts')},'ApiLogGroup':{'Value':R('ApiLogs')},'LoadBalancerDNS':{'Value':A('LoadBalancer','DNSName')}}
 template={'AWSTemplateFormatVersion':'2010-09-09','Description':'CloudVault: private compute and RDS, S3, SQS/Lambda, Bedrock, ALB/ASG, Secrets Manager and CloudWatch','Parameters':params,'Conditions':{'DualNat':{'Fn::Equals':[R('NatGatewayCount'),'2']},'HasHostedZone':{'Fn::Not':[{'Fn::Equals':[R('HostedZoneId'),'']}]}},'Resources':resources,'Outputs':outputs}
 Path(__file__).with_name('cloudformation.json').write_text(json.dumps(template,indent=2)+'\n')
 print(f'Generated {len(resources)} CloudFormation resources')
