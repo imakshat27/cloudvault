@@ -13,6 +13,7 @@ import authRoutes from "./routes/auth.js";
 import documentRoutes from "./routes/documents.js";
 import searchRoutes from "./routes/search.js";
 import askRoutes from "./routes/ask.js";
+import conversationRoutes from "./routes/conversations.js";
 
 const app = express();
 
@@ -106,6 +107,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/ask", askRoutes);
+app.use("/api/conversations", conversationRoutes);
 
 const webRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

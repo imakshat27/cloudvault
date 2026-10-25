@@ -12,8 +12,19 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { api } from "../services/api";
-export function Chat({ document: doc, onOpen, readyCount, compact = false }) {
-  const [messages, setMessages] = useState([]);
+export function Chat({
+  document: doc,
+  onOpen,
+  readyCount,
+  compact = false,
+  initialConversation,
+  onSaved,
+  onNew,
+  onBusyChange,
+  historyLoading = false,
+}) {
+  const [messages, setMessages] = useState(initialConversation?.messages || []);
+  const conversationId = useRef(initialConversation?.id || null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -22,13 +33,18 @@ export function Chat({ document: doc, onOpen, readyCount, compact = false }) {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [messages, busy]);
   async function send(text = input) {
-    if (!text.trim() || busy) return;
+    if (!text.trim() || busy || historyLoading) return;
     const question = text.trim();
     setInput("");
     setError("");
     setBusy(true);
+    onBusyChange?.(true);
     setMessages((m) => [...m, { role: "user", text: question }]);
     try {
+      if (onSaved && !conversationId.current) {
+        const created = await api.createConversation(question.slice(0, 120));
+        conversationId.current = created.conversation.id;
+      }
       const result = await api.ask(
         question,
         6,
@@ -37,21 +53,31 @@ export function Chat({ document: doc, onOpen, readyCount, compact = false }) {
           .filter((m) => m.role === "user")
           .slice(-4)
           .map((m) => m.text),
+        conversationId.current,
       );
-      setMessages((m) => [
-        ...m,
+      const nextMessages = [
+        ...messages,
+        { role: "user", text: question },
         {
           role: "assistant",
           text: result.answer,
           sources: result.sources,
           model: result.llmModel,
         },
-      ]);
+      ];
+      setMessages(nextMessages);
+      onSaved?.({
+        id: conversationId.current,
+        title: initialConversation?.title || question.slice(0, 120),
+        messages: nextMessages,
+      });
     } catch (e) {
+      setMessages(messages);
       setError(e.message);
       setInput(question);
     } finally {
       setBusy(false);
+      onBusyChange?.(false);
     }
   }
   const suggestions = doc
@@ -65,7 +91,8 @@ export function Chat({ document: doc, onOpen, readyCount, compact = false }) {
         ["Summarize my documents", BookOpen],
         ["Compare the main ideas", ListChecks],
       ];
-  const available = doc ? doc.status === "ready" : readyCount > 0;
+  const available =
+    !historyLoading && (doc ? doc.status === "ready" : readyCount > 0);
   return (
     <section
       className={`chat ${compact ? "compact" : ""}`}
@@ -74,15 +101,22 @@ export function Chat({ document: doc, onOpen, readyCount, compact = false }) {
       <header className="chat-header">
         <div>
           <Sparkles size={18} />
-          <strong>{compact ? "Ask this document" : "Research chat"}</strong>
+          <strong>
+            {compact
+              ? "Ask this document"
+              : initialConversation?.title || "Research chat"}
+          </strong>
         </div>
         <button
           className="icon-button"
           aria-label="New conversation"
-          disabled={busy || !messages.length}
+          disabled={busy || historyLoading || !messages.length}
           onClick={() => {
             setMessages([]);
+            conversationId.current = null;
+            setInput("");
             setError("");
+            onNew?.();
           }}
         >
           <Plus size={19} />

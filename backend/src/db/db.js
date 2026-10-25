@@ -77,6 +77,75 @@ class PostgresAdapter {
     await this.pool.query("SELECT 1");
   }
 
+  async listConversations(userId) {
+    return (
+      await this.pool.query(
+        "SELECT id,title,created_at,updated_at,jsonb_array_length(messages) AS message_count FROM conversations WHERE owner_id=$1 ORDER BY updated_at DESC LIMIT 100",
+        [userId],
+      )
+    ).rows;
+  }
+  async getConversation(id, userId) {
+    return (
+      (
+        await this.pool.query(
+          "SELECT * FROM conversations WHERE id=$1 AND owner_id=$2",
+          [id, userId],
+        )
+      ).rows[0] || null
+    );
+  }
+  async createConversation(userId, title) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT id FROM users WHERE id=$1 FOR UPDATE", [
+        userId,
+      ]);
+      const result = await client.query(
+        "INSERT INTO conversations (owner_id,title) SELECT $1,$2 WHERE (SELECT count(*) FROM conversations WHERE owner_id=$1)<100 RETURNING *",
+        [userId, title],
+      );
+      if (!result.rowCount)
+        throw Object.assign(
+          new Error(
+            "You have 100 conversations. Delete an old chat before starting another.",
+          ),
+          { status: 429 },
+        );
+      await client.query("COMMIT");
+      return result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async appendConversation(id, userId, messages) {
+    const result = await this.pool.query(
+      "UPDATE conversations SET messages=messages || $3::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND owner_id=$2 AND jsonb_array_length(messages)<=198 RETURNING id",
+      [id, userId, JSON.stringify(messages)],
+    );
+    if (!result.rowCount)
+      throw Object.assign(
+        new Error(
+          "This conversation is full or was deleted. Start a new conversation.",
+        ),
+        { status: 409 },
+      );
+  }
+  async deleteConversation(id, userId) {
+    return (
+      (
+        await this.pool.query(
+          "DELETE FROM conversations WHERE id=$1 AND owner_id=$2 RETURNING id",
+          [id, userId],
+        )
+      ).rowCount > 0
+    );
+  }
+
   // User queries
   async createUser({ email, passwordHash }) {
     const res = await this.pool.query(
@@ -341,6 +410,66 @@ class LocalEmbeddedAdapter {
 
   async healthcheck() {
     return true;
+  }
+
+  async listConversations(userId) {
+    return (this.data.conversations || [])
+      .filter((c) => c.owner_id === userId)
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      .slice(0, 100)
+      .map(({ messages, ...c }) => ({ ...c, message_count: messages.length }));
+  }
+  async getConversation(id, userId) {
+    const c = (this.data.conversations || []).find(
+      (c) => c.id === id && c.owner_id === userId,
+    );
+    return c ? structuredClone(c) : null;
+  }
+  async createConversation(userId, title) {
+    this.data.conversations ||= [];
+    if (
+      this.data.conversations.filter((c) => c.owner_id === userId).length >= 100
+    )
+      throw Object.assign(
+        new Error(
+          "You have 100 conversations. Delete an old chat before starting another.",
+        ),
+        { status: 429 },
+      );
+    const c = {
+      id: crypto.randomUUID(),
+      owner_id: userId,
+      title,
+      messages: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.data.conversations.push(c);
+    this._save();
+    return structuredClone(c);
+  }
+  async appendConversation(id, userId, messages) {
+    const c = (this.data.conversations || []).find(
+      (c) => c.id === id && c.owner_id === userId,
+    );
+    if (!c || c.messages.length > 198)
+      throw Object.assign(
+        new Error(
+          "This conversation is full or was deleted. Start a new conversation.",
+        ),
+        { status: 409 },
+      );
+    c.messages.push(...messages);
+    c.updated_at = new Date().toISOString();
+    this._save();
+  }
+  async deleteConversation(id, userId) {
+    const before = (this.data.conversations || []).length;
+    this.data.conversations = (this.data.conversations || []).filter(
+      (c) => !(c.id === id && c.owner_id === userId),
+    );
+    this._save();
+    return this.data.conversations.length < before;
   }
 
   // User queries

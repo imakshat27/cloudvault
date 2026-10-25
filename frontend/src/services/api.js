@@ -151,13 +151,40 @@ export const api = {
     });
   },
 
-  async ask(question, limit = 6, documentId = null, history = []) {
+  async ask(
+    question,
+    limit = 6,
+    documentId = null,
+    history = [],
+    conversationId = null,
+  ) {
     return request("/ask", {
       method: "POST",
-      body: JSON.stringify({ question, limit, documentId, history }),
+      body: JSON.stringify({
+        question,
+        limit,
+        documentId,
+        history,
+        conversationId,
+      }),
     });
   },
 
+  listConversations() {
+    return request("/conversations");
+  },
+  getConversation(id) {
+    return request(`/conversations/${id}`);
+  },
+  createConversation(title) {
+    return request("/conversations", {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    });
+  },
+  deleteConversation(id) {
+    return request(`/conversations/${id}`, { method: "DELETE" });
+  },
   async revokeShare(documentId, shareId) {
     return request(`/documents/${documentId}/shares/${shareId}`, {
       method: "DELETE",

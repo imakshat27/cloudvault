@@ -59,3 +59,13 @@ CREATE TABLE IF NOT EXISTS daily_usage (
  request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
  PRIMARY KEY (user_id,usage_date)
 );
+
+CREATE TABLE IF NOT EXISTS conversations (
+ id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+ owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ title VARCHAR(120) NOT NULL DEFAULT 'New conversation',
+ messages JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(messages) = 'array'),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_owner_updated ON conversations(owner_id,updated_at DESC);

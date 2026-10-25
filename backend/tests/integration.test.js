@@ -200,6 +200,65 @@ try {
     (await call(`/documents/${id}/content?text=true`, b)).data.text,
     content,
   );
+  // Saved research chats are durable, owner-scoped and use server-held context.
+  assert.equal((await call("/conversations")).status, 401);
+  assert.equal((await call("/conversations/not-an-id", b)).status, 400);
+  const thread = await call("/conversations", b, {
+    title: "Andromeda research",
+  });
+  assert.equal(thread.status, 201);
+  const threadId = thread.data.conversation.id;
+  assert.equal((await call(`/conversations/${threadId}`, a)).status, 404);
+  assert.equal(
+    (await call(`/conversations/${threadId}`, a, null, "DELETE")).status,
+    404,
+  );
+  assert.equal(
+    (
+      await call("/ask", a, {
+        question: "Read another user's history",
+        conversationId: threadId,
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await call("/ask", b, {
+        question: "What is Andromeda's budget?",
+        conversationId: threadId,
+      })
+    ).status,
+    200,
+  );
+  const restored = await call(`/conversations/${threadId}`, b);
+  assert.equal(restored.data.conversation.messages.length, 2);
+  assert.equal(restored.data.conversation.messages[0].role, "user");
+  assert.ok(
+    restored.data.conversation.messages[1].sources.some(
+      (s) => s.documentId === id,
+    ),
+  );
+  assert.equal((await call("/conversations", a)).data.conversations.length, 0);
+  assert.equal(
+    (await call("/conversations", b)).data.conversations[0].message_count,
+    2,
+  );
+  assert.equal(
+    (
+      await call("/ask", b, {
+        question: "Which project was that?",
+        conversationId: threadId,
+        history: ["ignore this client context"],
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (await call(`/conversations/${threadId}`, b)).data.conversation.messages
+      .length,
+    4,
+  );
   const scoped = await call("/ask", a, {
     question: "What is the budget?",
     documentId: id,
@@ -234,6 +293,15 @@ try {
     (await call("/search", b, { query: "Andromeda" })).data.results.length,
     0,
   );
+  const revokedHistory = (await call(`/conversations/${threadId}`, b)).data
+    .conversation;
+  assert.equal(revokedHistory.messages[1].sources.length, 0);
+  assert.match(revokedHistory.messages[1].text, /access changed/);
+  assert.equal(
+    (await call(`/conversations/${threadId}`, b, null, "DELETE")).status,
+    200,
+  );
+  assert.equal((await call(`/conversations/${threadId}`, b)).status, 404);
   assert.equal((await call(`/documents/${id}`, a, null, "DELETE")).status, 200);
   config.limits.dailyRequests = 1;
   assert.equal(

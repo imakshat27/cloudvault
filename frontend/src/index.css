@@ -2515,8 +2515,135 @@ svg {
     padding: 5px 8px;
   }
 }
-@media(max-width:480px){
- .discovery-content{width:100%}
- .discovery-content h2{font-size:24px;max-width:285px}
- .discovery-art{position:absolute;right:-30px;width:100px;opacity:.25}
+@media (max-width: 480px) {
+  .discovery-content {
+    width: 100%;
+  }
+  .discovery-content h2 {
+    font-size: 24px;
+    max-width: 285px;
+  }
+  .discovery-art {
+    position: absolute;
+    right: -30px;
+    width: 100px;
+    opacity: 0.25;
+  }
+}
+
+/* Saved research conversations */
+.research-workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 24px;
+}
+.research-workspace > .chat {
+  min-width: 0;
+}
+.research-history {
+  width: 230px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: 8px 16px 12px 0;
+  overflow: auto;
+}
+.history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--ink);
+}
+.history-note,
+.history-status {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 8px 0 14px;
+}
+.history-status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.history-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.history-list li {
+  display: flex;
+  align-items: center;
+  border-radius: 9px;
+  margin: 4px 0;
+}
+.history-list li.active {
+  background: #edf2e8;
+}
+.history-list li:hover {
+  background: #f5f7f2;
+}
+.history-open {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 12px 8px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 12px;
+}
+.history-open > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.history-open > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-open small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 5px;
+}
+.research-workspace .chat-header strong {
+  max-width: 42vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 760px) {
+  .research-workspace {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .research-history {
+    width: 100%;
+    max-height: 155px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 0 8px;
+  }
+  .history-note {
+    margin: 3px 0 6px;
+  }
+  .history-list {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+  }
+  .history-list li {
+    min-width: 200px;
+    max-width: 240px;
+    flex-shrink: 0;
+  }
+  .research-workspace .chat-header strong {
+    max-width: 65vw;
+  }
 }

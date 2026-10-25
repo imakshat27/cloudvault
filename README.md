@@ -10,7 +10,7 @@ A document workspace with natural-language file discovery, permission-aware retr
 - Upload PDF, DOCX, TXT, and Markdown files (25 MB maximum).
 - File library with grid/list layouts, filename filtering, content search, type filters, sorting, and personal stars.
 - PDF viewing and extracted-text viewing for other supported documents; authenticated downloads.
-- Dedicated research chat across accessible documents, plus document-scoped chat beside the viewer.
+- Dedicated research chat with private, database-backed history: reopen recent chats, start new conversations and delete old threads. Document-scoped chat remains beside the viewer.
 - Source cards that open the original document; previous user questions provide follow-up context.
 - Share with another registered account and revoke access. The same permissions gate file viewing, downloading, search, and RAG.
 - Asynchronous indexing with processing/error states and retries.
@@ -95,7 +95,7 @@ CI also runs the API lifecycle against real PostgreSQL/pgvector using a restrict
 
 ## Practical boundaries
 
-Scanned/image-only PDFs require OCR before upload. DOCX previews show extracted text; Markdown is rendered safely. Original page layout is preserved only for PDFs. Chat is session-local and currently keeps previous **user questions**, not a full persisted conversation history. Sharing is read-only and requires an existing account. Stars are stored in the browser per account.
+Scanned/image-only PDFs require OCR before upload. DOCX previews show extracted text; Markdown is rendered safely. Original page layout is preserved only for PDFs. Research conversations persist messages and citations per account, with up to 100 chats and 100 question/answer pairs per chat. Follow-up retrieval uses the last four saved user questions. Historical answers are hidden when a cited file is deleted or its sharing access is revoked. Document-side chats remain session-local. Conversations from before this feature cannot be recovered. Sharing is read-only and requires an existing account. Stars are stored in the browser per account.
 
 The local JSON database is for one development process. Cloud deployments require PostgreSQL. Cloud accounts default to 50 files and 250 MB per user, with 100 combined content-search/AI requests per user per UTC day. Production sign-up requires a private invitation code derived from the signing secret; the public options endpoint reveals only whether invitations are required.
 

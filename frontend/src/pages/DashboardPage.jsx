@@ -34,6 +34,7 @@ import {
 import { useAuth } from "../context/auth";
 import { api } from "../services/api";
 import { Chat } from "../components/Chat";
+import { ResearchChat } from "../components/ResearchChat";
 import { Dialog } from "../components/Dialog";
 const samples = [
   [
@@ -415,7 +416,7 @@ export function DashboardPage() {
             </div>
           )}
           {page === "chat" ? (
-            <Chat readyCount={readyCount} onOpen={open} />
+            <ResearchChat key={user.id} readyCount={readyCount} onOpen={open} />
           ) : (
             <>
               <div className="page-heading">

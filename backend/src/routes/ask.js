@@ -1,4 +1,5 @@
 import express from "express";
+import { visibleConversation } from "../services/conversations.js";
 import { db } from "../db/db.js";
 import { aiService } from "../services/ai.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -12,7 +13,34 @@ const router = express.Router();
  */
 router.post("/", requireAuth, async (req, res) => {
   try {
-    const { question, limit = 4, documentId, history = [] } = req.body;
+    const { question, limit = 4, documentId, conversationId } = req.body;
+    let history = req.body.history ?? [];
+    if (conversationId) {
+      if (
+        documentId ||
+        typeof conversationId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          conversationId,
+        )
+      )
+        return res.status(400).json({ error: "Invalid research conversation" });
+      const conversation = await db.getConversation(
+        conversationId,
+        req.user.id,
+      );
+      if (!conversation)
+        return res.status(404).json({ error: "Conversation not found" });
+      if (conversation.messages.length >= 200)
+        return res
+          .status(409)
+          .json({
+            error: "This conversation is full. Start a new conversation.",
+          });
+      history = (await visibleConversation(conversation, req.user.id)).messages
+        .filter((m) => m.role === "user")
+        .slice(-4)
+        .map((m) => m.text);
+    }
 
     if (
       !question ||
@@ -40,12 +68,10 @@ router.post("/", requireAuth, async (req, res) => {
     )
       return res.status(404).json({ error: "Document not found" });
     if (!(await db.consumeAiRequest(req.user.id)))
-      return res
-        .status(429)
-        .json({
-          error:
-            "Your daily search and AI question limit has been reached. Try again tomorrow (UTC).",
-        });
+      return res.status(429).json({
+        error:
+          "Your daily search and AI question limit has been reached. Try again tomorrow (UTC).",
+      });
     // 1. Generate question embedding vector
     const questionEmbedding = await aiService.generateEmbedding(
       [...history.slice(-2), trimmedQuestion].join("\n").slice(-12000),
@@ -66,7 +92,18 @@ router.post("/", requireAuth, async (req, res) => {
       contextChunks,
     });
 
+    if (conversationId)
+      await db.appendConversation(conversationId, req.user.id, [
+        { role: "user", text: trimmedQuestion },
+        {
+          role: "assistant",
+          text: answer,
+          sources,
+          model: llmModel || "standard",
+        },
+      ]);
     return res.json({
+      conversationId: conversationId || null,
       question: trimmedQuestion,
       answer,
       sources,
@@ -75,7 +112,9 @@ router.post("/", requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("[Ask] Error executing RAG question answering:", err);
-    return res.status(500).json({ error: "Question answering failed" });
+    return res
+      .status(err.status || 500)
+      .json({ error: err.status ? err.message : "Question answering failed" });
   }
 });
 
